@@ -6,7 +6,7 @@ Cliente SSH minimalista para Windows, hecho con Electron. Guarda una lista de se
 
 - **Keepalive SSH:** cada 15 s se manda una señal al servidor. Si no responde 3 veces seguidas, la conexión se da por perdida.
 - **Reconexión automática e infinita:** espera 1, 2, 5, 10 y 30 s entre intentos. A partir de ahí reintenta cada 30 s para siempre.
-- **tmux en el servidor:** si el servidor tiene tmux, la terminal abre la sesión `sshconnect` (`tmux new-session -A -s sshconnect`). Al reconectar vuelves a la misma sesión, con todo lo que estaba corriendo. Si no hay tmux, se abre un shell normal y la barra te avisa.
+- **tmux en el servidor:** si el servidor tiene tmux, la terminal abre la sesión `sshconnect` (`tmux -u new-session -A -s sshconnect`). Al reconectar vuelves a la misma sesión, con todo lo que estaba corriendo. `-u` fuerza UTF-8 para que los acentos y emojis se vean bien, y `window-size latest` evita que la ventana se encoja si otra PC se une a la misma sesión. Si no hay tmux, se abre un shell normal y la barra te avisa.
 - **Despertar la PC o volver la red:** al salir de la suspensión, o cuando Windows avisa que volvió la red, cada sesión que estaba reconectando reintenta en ese momento. Las que parecían conectadas se comprueban, y si no responden en 8 s, se reconectan.
 - **La PC no suspende la app** mientras haya una sesión activa.
 - **Huella del servidor (TOFU):** la primera conexión guarda la huella SHA256 del servidor, en el mismo formato que OpenSSH. Si después cambia, la app no conecta y te avisa, porque puede ser un ataque.

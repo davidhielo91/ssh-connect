@@ -281,8 +281,11 @@ class Session {
     // "-A" se une a la sesión si ya existe: así se recupera todo tras una reconexión.
     // set-clipboard/allow-passthrough dejan pasar el OSC 52 de los programas (copiar a Windows);
     // -q calla el error en tmux viejos que no conocen la opción.
-    const tmuxCmd = `tmux new-session -A -s ${TMUX_SESSION}`
-      + ' \\; set -gq set-clipboard on \\; set -gq allow-passthrough on';
+    // -u fuerza UTF-8 aunque el servidor no defina LANG (si no, tmux cambia acentos por "_").
+    // window-size latest: con dos clientes en la misma sesión, manda el último que se usó,
+    // en vez de encogerse al más chico.
+    const tmuxCmd = `tmux -u new-session -A -s ${TMUX_SESSION}`
+      + ' \\; set -gq set-clipboard on \\; set -gq allow-passthrough on \\; set -gq window-size latest';
     if (this.hasTmux) c.exec(tmuxCmd, { pty }, onOpen);
     else c.shell(pty, onOpen);
   }
