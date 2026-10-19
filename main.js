@@ -32,7 +32,8 @@ function getStore() {
   try {
     const data = JSON.parse(fs.readFileSync(userFile('servers.json'), 'utf8'));
     if (!Array.isArray(data?.servers)) throw new Error('servers.json sin lista de servidores');
-    store = data;
+    // Versiones anteriores guardaban qué servidores reconectar al abrir; ya no se usa.
+    store = { servers: data.servers };
     return store;
   } catch (err) {
     // Un archivo ilegible se aparta en vez de pisarlo con una lista vacía.
@@ -40,7 +41,7 @@ function getStore() {
       try { fs.renameSync(userFile('servers.json'), userFile('servers.json.corrupt')); } catch {}
     }
   }
-  store = { servers: [], open: [], active: null };
+  store = { servers: [] };
   // Las versiones anteriores guardaban un único servidor en config.json.
   try {
     const old = JSON.parse(fs.readFileSync(userFile('config.json'), 'utf8'));
@@ -50,8 +51,6 @@ function getStore() {
       host: old.host, port: old.port, username: old.username, useTmux: old.useTmux,
       hostFingerprint: old.hostFingerprint, passwordEnc: old.passwordEnc,
     });
-    store.open = [id];
-    store.active = id;
     writeStore();
     fs.renameSync(userFile('config.json'), userFile('config.json.bak'));
   } catch {}
@@ -91,14 +90,6 @@ function saveServer(cfg) {
   const i = list.findIndex((s) => s.id === cfg.id);
   if (i === -1) list.push(entry);
   else list[i] = entry;
-  writeStore();
-}
-
-// Los servidores abiertos se reconectan solos al volver a abrir la app.
-function setOpen(id, open) {
-  const st = getStore();
-  st.open = st.open.filter((x) => x !== id);
-  if (open) st.open.push(id);
   writeStore();
 }
 
@@ -224,7 +215,6 @@ class Session {
     this.cfg.hostFingerprint = this.seenFingerprint;
     this.cfg.acceptNewKey = false;
     if (this.test || fingerprintChanged) saveServer(this.cfg);
-    if (this.test) setOpen(this.id, true);
     this.test = false;
     this.attempt = 0;
     this.openShell();
@@ -396,10 +386,7 @@ function wakeAll() {
 
 // ---------- IPC ----------
 
-ipcMain.handle('servers:list', () => {
-  const st = getStore();
-  return { servers: st.servers.map(publicServer), open: st.open, active: st.active };
-});
+ipcMain.handle('servers:list', () => ({ servers: getStore().servers.map(publicServer) }));
 
 // Prueba los datos del formulario (sin reintentos) y los guarda tras el primer "ready".
 ipcMain.handle('server:save', async (e, form) => {
@@ -441,8 +428,6 @@ ipcMain.handle('server:delete', (e, id) => {
   dropSession(id);
   const st = getStore();
   st.servers = st.servers.filter((s) => s.id !== id);
-  st.open = st.open.filter((x) => x !== id);
-  if (st.active === id) st.active = null;
   writeStore();
 });
 
@@ -454,19 +439,10 @@ ipcMain.handle('session:open', (e, id) => {
   if (cfg.password === null) {
     return { ok: false, kind: 'password', error: 'No se pudo leer la contraseña guardada. Escríbela de nuevo.' };
   }
-  setOpen(id, true);
   return s.start(cfg, false);
 });
 
-ipcMain.on('session:close', (e, id) => {
-  dropSession(id);
-  setOpen(id, false);
-});
-
-ipcMain.on('session:active', (e, id) => {
-  getStore().active = id;
-  writeStore();
-});
+ipcMain.on('session:close', (e, id) => dropSession(id));
 
 ipcMain.on('ssh:write', (e, id, data, binary) => sessions.get(id)?.write(data, binary));
 ipcMain.on('ssh:resize', (e, id, cols, rows) => sessionFor(id).resize(cols, rows));

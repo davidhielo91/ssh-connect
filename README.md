@@ -13,7 +13,7 @@ Cliente SSH minimalista para Windows, hecho con Electron. Guarda una lista de se
 - **Contraseñas cifradas** con DPAPI de Windows (`safeStorage` de Electron).
 - **Portapapeles por OSC 52:** los programas del servidor (vim, tmux, OpenCode…) pueden copiar directo a tu portapapeles de Windows. Esto funciona también a través de tmux.
 - **Enlaces:** se abren con **Shift+clic**. Solo se abren direcciones `http://` y `https://`.
-- Al abrir la app se reconectan solos los servidores que estaban abiertos cuando la cerraste.
+- **Nada se conecta solo al abrir la app:** cada servidor se conecta cuando das clic en él en la lista.
 
 ## Uso
 
@@ -22,7 +22,7 @@ Cliente SSH minimalista para Windows, hecho con Electron. Guarda una lista de se
 - **Agregar:** usa "+ Agregar servidor" y escribe el nombre, el color, la dirección, el puerto, el usuario y la contraseña. La app **prueba la conexión antes de guardar**. Si falla, el servidor nuevo no se guarda y el formulario te muestra el error.
 - **Editar:** usa el lápiz ✎ junto al servidor o el engrane ⚙ de la barra de estado. Si cambias solo el nombre o el color, se guarda sin reconectar. Si cambias datos de conexión, se vuelven a probar. Si dejas la contraseña vacía, se conserva la guardada.
 - **Eliminar:** presiona "Eliminar" y después "Sí, eliminar" (tienes 4 s para confirmar).
-- **Desconectar:** desde el formulario de edición. Ese servidor ya no se reintenta ni se reconecta al abrir la app.
+- **Desconectar:** desde el formulario de edición. Ese servidor deja de reintentar hasta que vuelvas a darle clic.
 - Si la contraseña es incorrecta o la huella cambió, la app no reintenta y abre el formulario. En el caso de la huella, presiona **Guardar** para aceptar la nueva, pero hazlo solo si sabes por qué cambió (por ejemplo, porque reinstalaste el servidor).
 - Si la contraseña guardada no se puede leer, por ejemplo después de cambiar de usuario de Windows, la app te la pide de nuevo.
 
@@ -65,9 +65,7 @@ Sobre el clic derecho, hay dos casos especiales:
 {
   "servers": [{ "id": "…", "name": "…", "color": "blue", "host": "…", "port": 22,
                 "username": "…", "useTmux": true, "hostFingerprint": "SHA256:…",
-                "passwordEnc": "…" }],
-  "open": ["…"],
-  "active": "…"
+                "passwordEnc": "…" }]
 }
 ```
 
@@ -117,11 +115,10 @@ Si la ventana está tapada, el `ResizeObserver` no se dispara y hay que llamar `
 
 | Canal | Dirección | Uso |
 |---|---|---|
-| `servers:list` | renderer → main | Lista de servidores (sin contraseñas), abiertos y activo |
+| `servers:list` | renderer → main | Lista de servidores (sin contraseñas) |
 | `server:save` | renderer → main | Prueba y guarda el formulario; responde `{ok, error, kind, id}` |
 | `server:delete` | renderer → main | Elimina un servidor |
 | `session:open` / `session:close` | renderer → main | Abre (con reintentos) o cierra la sesión de un servidor |
-| `session:active` | renderer → main | Guarda qué servidor está a la vista |
 | `session:wake` | renderer → main | La red volvió: reintentar o comprobar sesiones |
 | `ssh:write` / `ssh:resize` | renderer → main | Teclado y tamaño de la terminal |
 | `clip:write` / `clip:read` | renderer → main | Portapapeles |

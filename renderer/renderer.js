@@ -163,7 +163,6 @@ api.onData((id, data) => views.get(id)?.term.write(data));
 
 function select(id) {
   active = id;
-  api.setActive(id);
   $('home').hidden = !!id;
   $('terms').hidden = !id;
   $('band').hidden = !id;
@@ -481,10 +480,5 @@ window.addEventListener('online', () => api.wake());
 
 // ---------- Inicio ----------
 
-(async () => {
-  const st = await api.listServers();
-  servers = st.servers;
-  // Se reconectan los servidores que estaban abiertos al cerrar la app.
-  for (const id of st.open) if (server(id)) openSession(id);
-  select(server(st.active) && st.open.includes(st.active) ? st.active : null);
-})();
+// Al abrir no se conecta nada: cada servidor se conecta cuando lo eliges en la lista.
+refresh();
