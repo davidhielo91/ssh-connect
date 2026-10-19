@@ -1,6 +1,29 @@
-# SSH Connect
+<p align="center">
+  <img src="build/icon.png" alt="Ícono de SSH Connect" width="96">
+</p>
 
-Cliente SSH minimalista para Windows, hecho con Electron. Guarda una lista de servidores, cada uno con un nombre y un color para reconocerlo. Puedes tener varios conectados a la vez, con una terminal por servidor. Está pensado para que **la sesión nunca se caiga**.
+<h1 align="center">SSH Connect</h1>
+
+<p align="center">
+  Cliente SSH minimalista para Windows, pensado para que <b>la sesión nunca se caiga</b>.
+</p>
+
+![Terminal conectada a un servidor con tmux](docs/terminal.png)
+
+Guarda una lista de servidores, cada uno con un nombre y un color para reconocerlo. Puedes tener varios conectados a la vez, con una terminal por servidor. Si se va el internet o suspendes la PC, se reconecta solo y vuelve a la misma sesión de tmux, con todo lo que estaba corriendo.
+
+## Capturas
+
+| Tus servidores | Agregar un servidor |
+|---|---|
+| ![Pantalla principal con la lista de servidores y su estado](docs/servidores.png) | ![Formulario para agregar un servidor](docs/formulario.png) |
+| Cada servidor tiene su color. El punto verde indica los que están conectados. | La app prueba la conexión antes de guardar. |
+
+![Servidor desconectado: se conecta con clic derecho → Conectar](docs/desconectado.png)
+
+Nada se conecta solo: un servidor se conecta con **clic derecho → Conectar**.
+
+> Las capturas usan servidores y direcciones de ejemplo.
 
 ## Funciones
 
