@@ -11,7 +11,7 @@ Cliente SSH minimalista para Windows, hecho con Electron. Guarda una lista de se
 - **La PC no suspende la app** mientras haya una sesión activa.
 - **Huella del servidor (TOFU):** la primera conexión guarda la huella SHA256 del servidor, en el mismo formato que OpenSSH. Si después cambia, la app no conecta y te avisa, porque puede ser un ataque.
 - **Contraseñas cifradas** con DPAPI de Windows (`safeStorage` de Electron).
-- **Portapapeles por OSC 52:** los programas del servidor (vim, tmux, OpenCode…) pueden copiar directo a tu portapapeles de Windows. Esto funciona también a través de tmux.
+- **Portapapeles por OSC 52:** los programas del servidor (vim, tmux, OpenCode…) pueden copiar directo a tu portapapeles de Windows. Esto funciona también a través de tmux. Cada copia se avisa unos segundos en la barra ("vps copió 120 caracteres al portapapeles"), y una copia de más de 1 MB se rechaza.
 - **Enlaces:** se abren con **Shift+clic**. Solo se abren direcciones `http://` y `https://`.
 - **Nada se conecta sin que lo pidas:** ni al abrir la app ni al elegir un servidor. Solo se conecta con **clic derecho → Conectar**.
 
@@ -82,7 +82,7 @@ Requisitos: Node.js y npm 11.
 ```sh
 npm install      # instala dependencias (solo electron ejecuta su script de instalación)
 npm start        # abre la app en modo desarrollo
-npm run dist     # genera dist/SSH Connect Setup <versión>.exe (instalador NSIS)
+npm run dist     # genera dist/SSH Connect Setup <versión>.exe (instalador NSIS, con el ícono de build/icon.png)
 node --check main.js   # revisión rápida de sintaxis
 ```
 

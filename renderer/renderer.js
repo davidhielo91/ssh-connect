@@ -45,11 +45,16 @@ function openLink(e, uri) {
   if (e.shiftKey) api.openLink(uri);
 }
 
+// Lo máximo que un programa del servidor puede copiar a tu portapapeles.
+const OSC52_MAX = 1024 * 1024;
+const TOO_BIG = Symbol('demasiado grande');
+
 // OSC 52: así copian los programas del servidor (OpenCode, tmux, vim…). Llega como
 // "<destino>;<base64>". Una petición de lectura ("?") se ignora: el servidor no lee el portapapeles.
 function osc52(data) {
   const b64 = data.slice(data.indexOf(';') + 1);
   if (!b64 || b64 === '?') return null;
+  if (b64.length * 3 / 4 > OSC52_MAX) return TOO_BIG;
   try {
     return new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
   } catch {
@@ -87,12 +92,18 @@ function view(id) {
     if (!/^\x1b\[([M<]|[IO]$)/.test(data)) v.appCopied = false;
     api.write(id, data, false);
   });
+  // Cada copia del servidor se avisa en la barra, para que nunca cambie tu portapapeles a escondidas.
   term.parser.registerOscHandler(52, (data) => {
     const text = osc52(data);
-    if (text) {
+    const name = server(id)?.name || 'El servidor';
+    if (text === TOO_BIG) {
+      flash(`${name} intentó copiar más de 1 MB al portapapeles; no se copió.`, 'warn');
+    } else if (text) {
       api.copy(text);
       v.appCopied = true;
       v.copies++;
+      const n = [...text].length;
+      flash(`${name} copió ${n.toLocaleString('es')} ${n === 1 ? 'carácter' : 'caracteres'} al portapapeles.`);
     }
     return true;
   });
@@ -300,6 +311,15 @@ async function refresh() {
 }
 
 // ---------- Barra de estado ----------
+
+// Aviso breve a la derecha de la barra (p. ej. "copió 120 caracteres"); se borra solo.
+let flashTimer = null;
+function flash(text, kind = '') {
+  clearTimeout(flashTimer);
+  $('flash').textContent = text;
+  $('flash').dataset.kind = kind;
+  flashTimer = setTimeout(() => { $('flash').textContent = ''; }, 4000);
+}
 
 function setBar(state, text, countdown = 0, elapsed = 0) {
   $('bar').dataset.state = state;

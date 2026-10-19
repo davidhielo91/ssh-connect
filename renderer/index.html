@@ -100,6 +100,8 @@
     #dot { width: 7px; height: 7px; border-radius: 50%; background: var(--state); flex: none; }
     #status { overflow: hidden; text-overflow: ellipsis; }
     #notice { color: var(--warn); overflow: hidden; text-overflow: ellipsis; flex: 1; }
+    #flash { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 50%; }
+    #flash[data-kind=warn] { color: var(--warn); }
     #settings { margin-left: auto; background: none; border: 0; border-radius: 4px; color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer; padding: 3px 6px; }
     #settings:hover, #settings[aria-expanded=true] { color: var(--text-strong); }
 
@@ -199,6 +201,7 @@
     <span id="dot" aria-hidden="true"></span>
     <span id="status" role="status"></span>
     <span id="notice" aria-live="polite"></span>
+    <span id="flash" aria-live="polite"></span>
     <button id="settings" title="Editar servidor" aria-label="Editar servidor" aria-expanded="false" aria-controls="setup"><span aria-hidden="true">⚙</span></button>
   </div>
 
