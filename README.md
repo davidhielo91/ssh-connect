@@ -152,6 +152,15 @@ idle ─▶ connecting ─▶ connected ─(exit del shell)─▶ ended ─(Ente
 - **`idle`** es el estado tras desconectar a mano.
 - En el *modo prueba* (al guardar el formulario) no hay reintentos. En el *modo guardado* (abrir un servidor) se reintenta para siempre.
 
+## Seguridad
+
+- La huella de cada servidor se guarda la primera vez; si cambia, la app no conecta y te avisa.
+- Las contraseñas se guardan cifradas con DPAPI y solo se pueden leer con tu usuario de Windows en esta PC.
+- La ventana no carga nada de internet: no navega a otras páginas, no abre ventanas y no pide permisos (cámara, micrófono, notificaciones).
+- Solo se abren enlaces `http` y `https`, y siempre con Shift+clic.
+- Un servidor solo puede copiar a tu portapapeles hasta 1 MB, y cada copia se avisa en la barra.
+- El instalador desactiva los modos de depuración de Electron (`ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, `--inspect`) y verifica la integridad de su código al abrir, para que otro programa no pueda ejecutar código dentro de la app.
+
 ## Limitaciones (por diseño)
 
 Para que la app siga siendo simple:

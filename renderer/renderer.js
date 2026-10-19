@@ -193,6 +193,9 @@ function select(id) {
 
 // Si la contraseña guardada no se puede leer, se pide de nuevo.
 async function openSession(id) {
+  // Al desconectar, main olvida la sesión y su tamaño; la terminal solo lo avisa cuando cambia.
+  const v = views.get(id);
+  if (v) api.resize(id, v.term.cols, v.term.rows);
   const res = await api.open(id);
   if (!res.ok && id === active && $('setup').hidden) openForm(id, res.error, 'auth');
 }

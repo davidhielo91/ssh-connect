@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, powerMonitor, powerSaveBlocker, clipboard, Menu, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, powerMonitor, powerSaveBlocker, clipboard, Menu, shell, dialog, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -185,17 +185,22 @@ class Session {
     c.on('error', (err) => this.onDown(gen, err));
     c.on('close', () => this.onDown(gen));
 
-    c.connect({
-      host: this.cfg.host,
-      port: this.cfg.port,
-      username: this.cfg.username,
-      password: this.cfg.password,
-      tryKeyboard: true,
-      readyTimeout: 20000,
-      keepaliveInterval: 15000,
-      keepaliveCountMax: 3,
-      hostVerifier: (key) => this.verifyHost(key),
-    });
+    // ssh2 lanza en vez de emitir 'error' con algunos datos inválidos: se trata igual que una caída.
+    try {
+      c.connect({
+        host: this.cfg.host,
+        port: this.cfg.port,
+        username: this.cfg.username,
+        password: this.cfg.password,
+        tryKeyboard: true,
+        readyTimeout: 20000,
+        keepaliveInterval: 15000,
+        keepaliveCountMax: 3,
+        hostVerifier: (key) => this.verifyHost(key),
+      });
+    } catch (err) {
+      this.onDown(gen, err);
+    }
   }
 
   verifyHost(key) {
@@ -295,7 +300,7 @@ class Session {
     if (this.hostKeyMismatch) {
       return this.fail('fingerprint',
         `¡La huella del servidor cambió! (${this.hostKeyMismatch}). Puede ser un ataque. ` +
-        'Si reinstalaste el servidor y confías en el cambio, presiona Conectar para aceptar la nueva huella.');
+        'Si reinstalaste el servidor y confías en el cambio, presiona Guardar para aceptar la nueva huella.');
     }
     if (err && err.level === 'client-authentication') return this.fail('auth', friendlyError(err));
     if (this.test) return this.fail('test', friendlyError(err));
@@ -400,8 +405,13 @@ ipcMain.handle('server:save', async (e, form) => {
   const saved = form.id ? getServer(form.id) : null;
   if (form.id && !saved) return { ok: false, error: 'No se encontró el servidor guardado.' };
   const id = saved ? saved.id : crypto.randomUUID();
-  const host = String(form.host).trim();
+  const host = String(form.host ?? '').trim();
   const port = Number(form.port) || 22;
+  // El formulario ya valida esto, pero main no confía: ssh2 lanza con un puerto fuera de rango,
+  // y con la dirección vacía se conectaría a esta misma PC.
+  if (!host) return { ok: false, error: 'Escribe la dirección del servidor.' };
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, error: 'El puerto debe ser un número del 1 al 65535.' };
+  if (!String(form.username ?? '').trim()) return { ok: false, error: 'Escribe el usuario.' };
   const cfg = {
     id,
     name: String(form.name).trim() || host,
@@ -485,8 +495,11 @@ ipcMain.on('session:wake', () => wakeAll());
 ipcMain.on('clip:write', (e, text) => clipboard.writeText(text));
 ipcMain.handle('clip:read', () => clipboard.readText());
 // Solo enlaces web: nada de file:, javascript: u otros esquemas que mande el servidor.
+// Se interpreta con URL (no con una regex) para que no cuele una dirección malformada.
 ipcMain.on('link:open', (e, url) => {
-  if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+  let u;
+  try { u = new URL(String(url)); } catch { return; }
+  if (u.protocol === 'http:' || u.protocol === 'https:') shell.openExternal(u.href);
 });
 
 // ---------- Ventana ----------
@@ -523,6 +536,8 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
+    // La app no necesita cámara, micrófono, notificaciones ni ningún otro permiso del navegador.
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => callback(false));
     createWindow();
     // Tras suspender, la red tarda un momento en volver.
     powerMonitor.on('resume', () => setTimeout(wakeAll, 2000));
