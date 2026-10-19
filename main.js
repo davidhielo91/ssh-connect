@@ -103,6 +103,8 @@ function friendlyError(err) {
   if (code === 'ECONNRESET') return 'La conexión se reinició.';
   if (code === 'ETIMEDOUT' || /timed out/i.test(err.message)) return 'El servidor no respondió a tiempo.';
   if (/keepalive/i.test(err.message)) return 'El servidor dejó de responder.';
+  // ssh2: "Unable to open shell", "Unable to exec", "Unable to request a pseudo-TTY"…
+  if (/^unable to /i.test(err.message)) return 'El servidor aceptó la contraseña pero no dejó abrir una terminal.';
   return err.message;
 }
 
@@ -124,6 +126,7 @@ class Session {
     this.state = 'idle';
     this.test = false;     // true mientras probamos datos nuevos del formulario (sin reintentos)
     this.pending = null;   // resolve() de la promesa que espera el formulario
+    this.saveOnOpen = false; // guardar la config cuando abra el shell (prueba o huella nueva)
     this.hasTmux = false;
     this.notice = '';
     this.blocker = null;
@@ -214,8 +217,9 @@ class Session {
     const fingerprintChanged = this.cfg.hostFingerprint !== this.seenFingerprint;
     this.cfg.hostFingerprint = this.seenFingerprint;
     this.cfg.acceptNewKey = false;
-    if (this.test || fingerprintChanged) saveServer(this.cfg);
-    this.test = false;
+    // Se guarda cuando el shell ya abrió: si el servidor acepta la contraseña pero no da shell,
+    // la prueba del formulario falla y un servidor nuevo no queda guardado.
+    this.saveOnOpen = this.test || fingerprintChanged;
     this.attempt = 0;
     this.openShell();
   }
@@ -251,6 +255,9 @@ class Session {
       this.opening = false;
       if (err) return this.onDown(gen, err);
       this.stream = stream;
+      if (this.saveOnOpen) saveServer(this.cfg);
+      this.saveOnOpen = false;
+      this.test = false;
       let exited = false;
       stream.on('data', (d) => send('ssh:data', this.id, d));
       stream.stderr.on('data', (d) => send('ssh:data', this.id, d));
