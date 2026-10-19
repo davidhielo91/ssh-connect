@@ -8,7 +8,7 @@ Cliente SSH minimalista para Windows, hecho con Electron. Guarda una lista de se
 - **Reconexión automática e infinita:** espera 1, 2, 5, 10 y 30 s entre intentos. A partir de ahí reintenta cada 30 s para siempre.
 - **tmux en el servidor:** si el servidor tiene tmux, la terminal abre la sesión `sshconnect` (`tmux -u new-session -A -s sshconnect`). Al reconectar vuelves a la misma sesión, con todo lo que estaba corriendo. `-u` fuerza UTF-8 para que los acentos y emojis se vean bien, y `window-size latest` evita que la ventana se encoja si otra PC se une a la misma sesión. Si no hay tmux, se abre un shell normal y la barra te avisa.
 - **Despertar la PC o volver la red:** al salir de la suspensión, o cuando Windows avisa que volvió la red, cada sesión que estaba reconectando reintenta en ese momento. Las que parecían conectadas se comprueban, y si no responden en 8 s, se reconectan.
-- **La PC no suspende la app** mientras haya una sesión activa.
+- **La PC no entra en suspensión** mientras haya un servidor conectado, conectándose o reconectando, para que la sesión no se corte. Cuando desconectas todos, la PC vuelve a suspenderse con normalidad.
 - **Huella del servidor (TOFU):** la primera conexión guarda la huella SHA256 del servidor, en el mismo formato que OpenSSH. Si después cambia, la app no conecta y te avisa, porque puede ser un ataque.
 - **Contraseñas cifradas** con DPAPI de Windows (`safeStorage` de Electron).
 - **Portapapeles por OSC 52:** los programas del servidor (vim, tmux, OpenCode…) pueden copiar directo a tu portapapeles de Windows. Esto funciona también a través de tmux. Cada copia se avisa unos segundos en la barra ("vps copió 120 caracteres al portapapeles"), y una copia de más de 1 MB se rechaza.
@@ -32,7 +32,7 @@ Tus servidores se guardan aparte del programa, así que actualizar o reinstalar 
 - **Editar:** usa el lápiz ✎ junto al servidor o el engrane ⚙ de la barra de estado. Si cambias solo el nombre o el color, se guarda sin reconectar. Si cambias datos de conexión, se vuelven a probar. Si el servidor estaba desconectado, después de la prueba vuelve a quedar desconectado. Si dejas la contraseña vacía, se conserva la guardada.
 - **Eliminar:** con clic derecho → Eliminar… (pide confirmación), o en el formulario con "Eliminar" y después "Sí, eliminar" (tienes 4 s para confirmar).
 - **Desconectar:** con clic derecho → Desconectar, o desde el formulario de edición. Deja de reintentar hasta que lo vuelvas a conectar.
-- Si la contraseña es incorrecta o la huella cambió, la app no reintenta y abre el formulario. En el caso de la huella, presiona **Guardar** para aceptar la nueva, pero hazlo solo si sabes por qué cambió (por ejemplo, porque reinstalaste el servidor).
+- Si la contraseña es incorrecta o la huella cambió, la app no reintenta y abre el formulario (si estás viendo ese servidor; si no, el aviso aparece al editarlo). En el caso de la huella, presiona **Guardar** para aceptar la nueva, pero hazlo solo si sabes por qué cambió (por ejemplo, porque reinstalaste el servidor).
 - Si la contraseña guardada no se puede leer, por ejemplo después de cambiar de usuario de Windows, la app te la pide de nuevo.
 
 ### Estados (el punto junto a cada servidor y la barra de abajo)
@@ -145,7 +145,7 @@ idle ─▶ connecting ─▶ connected ─(exit del shell)─▶ ended ─(Ente
             │             │
             │             └─(caída)─▶ reconnecting ─(espera o despertar)─▶ nuevo intento
             │
-            └─(contraseña o huella)─▶ failed
+            └─(contraseña o huella)─▶ failed ◀─(contraseña o huella)─ reconnecting
 ```
 
 - **`failed`** lleva `kind`: `auth` (contraseña), `fingerprint` (huella cambió) o `test` (falló la prueba del formulario). Ninguno se reintenta.
@@ -159,7 +159,8 @@ idle ─▶ connecting ─▶ connected ─(exit del shell)─▶ ended ─(Ente
 - La ventana no carga nada de internet: no navega a otras páginas, no abre ventanas y no pide permisos (cámara, micrófono, notificaciones).
 - Solo se abren enlaces `http` y `https`, y siempre con Shift+clic.
 - Un servidor solo puede copiar a tu portapapeles hasta 1 MB, y cada copia se avisa en la barra.
-- El instalador desactiva los modos de depuración de Electron (`ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, `--inspect`) y verifica la integridad de su código al abrir, para que otro programa no pueda ejecutar código dentro de la app.
+- El instalador desactiva los modos de depuración (`ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, `--inspect` y `--remote-debugging-port`) y verifica la integridad de su código al abrir. Así otro programa no puede abrir SSH Connect de forma especial para controlarlo.
+- Lo que pegas se limpia del carácter ESC, para que un texto copiado de una página no pueda ejecutar comandos escondidos.
 
 ## Limitaciones (por diseño)
 

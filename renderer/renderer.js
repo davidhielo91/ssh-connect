@@ -65,8 +65,10 @@ function osc52(data) {
 // Cuánto espera el clic derecho la copia OSC 52 de un programa que usa el mouse antes de pegar.
 const APP_COPY_WAIT = 600;
 
+// Se quita ESC de lo pegado: un texto copiado de una página (o de otro servidor) podría traer un
+// "\x1b[201~" escondido que cierra el pegado protegido del shell y ejecuta lo que viene después.
 async function paste(term) {
-  const text = await api.paste();
+  const text = (await api.paste()).replace(/\x1b/g, '');
   if (text) term.paste(text);
 }
 
@@ -197,7 +199,11 @@ async function openSession(id) {
   const v = views.get(id);
   if (v) api.resize(id, v.term.cols, v.term.rows);
   const res = await api.open(id);
-  if (!res.ok && id === active && $('setup').hidden) openForm(id, res.error, 'auth');
+  if (!res.ok && id === active && $('setup').hidden) {
+    openForm(id, res.error, 'auth');
+    // El usuario pidió conectar: al escribir la contraseña debe quedar conectado.
+    stayConnected = true;
+  }
 }
 
 function connect(id) {
@@ -210,7 +216,8 @@ function disconnect(id) {
 }
 
 async function removeServer(id) {
-  await api.deleteServer(id);
+  const res = await api.deleteServer(id);
+  if (!res.ok) return flash(res.error, 'warn');
   dropView(id);
   if (active === id) active = null;
   await refresh();
@@ -299,15 +306,19 @@ function renderLists() {
   $('home-list').replaceChildren(...servers.map(item));
 
   const empty = !servers.length;
-  $('home-title').textContent = empty ? 'Agrega tu primer servidor' : 'Tus servidores';
-  $('home-hint').textContent = empty
+  const error = $('home-hint').dataset.error;
+  $('home-title').textContent = error ? 'No se pudo abrir tu lista' : empty ? 'Agrega tu primer servidor' : 'Tus servidores';
+  $('home-hint').textContent = error || (empty
     ? 'Necesitas la dirección del servidor, tu usuario y tu contraseña SSH.'
-    : 'Para conectar uno, haz clic derecho sobre él y elige Conectar. Los que ya están conectados siguen así en segundo plano.';
-  $('home-add').hidden = !empty;
+    : 'Para conectar uno, haz clic derecho sobre él y elige Conectar. Los que ya están conectados siguen así en segundo plano.');
+  $('home-add').hidden = !empty || !!error;
 }
 
 async function refresh() {
-  servers = (await api.listServers()).servers;
+  const res = await api.listServers();
+  servers = res.servers;
+  if (res.error) $('home-hint').dataset.error = res.error;
+  else delete $('home-hint').dataset.error;
   if (active && server(active)) $('band').dataset.color = server(active).color;
   renderLists();
   renderBar();
@@ -419,6 +430,12 @@ function nextColor() {
 
 function openForm(id = null, error = '', kind = '') {
   const s = id && server(id);
+  // Si falló sin estar a la vista (p. ej. huella cambiada al reconectar), se muestra ese fallo al editar.
+  const last = s && views.get(id)?.status;
+  if (!error && last?.state === 'failed' && last.kind !== 'test') {
+    error = last.message;
+    kind = last.kind;
+  }
   editing = s ? id : null;
   tested = false;
   // "failed" solo llega tras un Conectar del usuario (o desde este mismo formulario).
@@ -474,10 +491,12 @@ form.addEventListener('submit', async (e) => {
     password: field('password').value,
     useTmux: field('useTmux').checked,
     acceptNewKey,
-  });
+  }).catch((err) => ({ ok: false, error: `Error inesperado: ${err.message}` })); // nunca dejar el formulario trabado
   setBusy(false);
   if (res.ok) {
     if (id && !stayConnected) disconnect(res.id);
+    // Una prueba fallida cortó la sesión y luego se guardó sin cambios de conexión: se reconecta.
+    else if (id && stateOf(id) === 'failed') openSession(id);
     await refresh();
     closeForm();
     select(res.id);
@@ -542,5 +561,5 @@ window.addEventListener('online', () => api.wake());
 
 // ---------- Inicio ----------
 
-// Al abrir no se conecta nada: cada servidor se conecta cuando lo eliges en la lista.
+// Al abrir no se conecta nada: un servidor solo se conecta con clic derecho → Conectar.
 refresh();

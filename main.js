@@ -4,6 +4,12 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { Client } = require('ssh2');
 
+// Ya instalada, la app no se deja abrir con el depurador remoto de Chromium: con él otro programa
+// controlaría la ventana y podría escribir en las sesiones. (Los fuses ya bloquean --inspect.)
+if (app.isPackaged && ['remote-debugging-port', 'remote-debugging-pipe'].some((s) => app.commandLine.hasSwitch(s))) {
+  app.exit(1);
+}
+
 // Segundos de espera entre reintentos; el último se repite para siempre.
 const BACKOFF = [1, 2, 5, 10, 30];
 const TMUX_SESSION = 'sshconnect';
@@ -20,38 +26,53 @@ const userFile = (name) => path.join(app.getPath('userData'), name);
 let store = null;
 
 // Se escribe a un temporal y se renombra: si la app se corta a medias, servers.json queda intacto.
-function writeStore() {
-  fs.mkdirSync(app.getPath('userData'), { recursive: true });
+// La lista en memoria solo cambia si se pudo escribir, para que nunca muestre algo que no está guardado.
+function writeStore(next) {
   const file = userFile('servers.json');
-  fs.writeFileSync(file + '.tmp', JSON.stringify(store, null, 2));
-  fs.renameSync(file + '.tmp', file);
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true });
+    fs.writeFileSync(file + '.tmp', JSON.stringify(next, null, 2));
+    fs.renameSync(file + '.tmp', file);
+  } catch (err) {
+    throw new Error(`No se pudo guardar la lista de servidores (${err.code || err.message}). ` +
+      'Revisa que haya espacio en el disco y que ningún programa tenga abierto servers.json.');
+  }
+  store = next;
 }
 
 function getStore() {
   if (store) return store;
+  let text = null;
   try {
-    const data = JSON.parse(fs.readFileSync(userFile('servers.json'), 'utf8'));
-    if (!Array.isArray(data?.servers)) throw new Error('servers.json sin lista de servidores');
-    // Versiones anteriores guardaban qué servidores reconectar al abrir; ya no se usa.
-    store = { servers: data.servers };
-    return store;
+    text = fs.readFileSync(userFile('servers.json'), 'utf8');
   } catch (err) {
-    // Un archivo ilegible se aparta en vez de pisarlo con una lista vacía.
-    if (err.code !== 'ENOENT') {
-      try { fs.renameSync(userFile('servers.json'), userFile('servers.json.corrupt')); } catch {}
+    // Si no existe, se empieza de cero. Si está bloqueado (antivirus, OneDrive…), se lanza el error
+    // y store sigue en null: así nada lo pisa, y la siguiente llamada vuelve a intentar leerlo.
+    if (err.code !== 'ENOENT') throw err;
+  }
+  if (text !== null) {
+    let data = null;
+    try { data = JSON.parse(text); } catch {}
+    if (Array.isArray(data?.servers)) {
+      // Versiones anteriores guardaban qué servidores reconectar al abrir; ya no se usa.
+      store = { servers: data.servers };
+      return store;
     }
+    // Dañado de verdad: se aparta con fecha (sin pisar uno anterior). Si ni eso se puede, se lanza.
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    fs.renameSync(userFile('servers.json'), userFile(`servers.json.corrupt-${stamp}`));
   }
   store = { servers: [] };
   // Las versiones anteriores guardaban un único servidor en config.json.
   try {
     const old = JSON.parse(fs.readFileSync(userFile('config.json'), 'utf8'));
     const id = crypto.randomUUID();
-    store.servers.push({
+    // Solo se aparta config.json si la lista nueva se pudo escribir; si no, se reintenta al abrir.
+    writeStore({ servers: [{
       id, name: 'Mi servidor', color: 'blue',
       host: old.host, port: old.port, username: old.username, useTmux: old.useTmux,
       hostFingerprint: old.hostFingerprint, passwordEnc: old.passwordEnc,
-    });
-    writeStore();
+    }] });
     fs.renameSync(userFile('config.json'), userFile('config.json.bak'));
   } catch {}
   return store;
@@ -86,11 +107,11 @@ function saveServer(cfg) {
     hostFingerprint: cfg.hostFingerprint,
     passwordEnc: safeStorage.encryptString(cfg.password).toString('base64'),
   };
-  const list = getStore().servers;
+  const list = getStore().servers.slice();
   const i = list.findIndex((s) => s.id === cfg.id);
   if (i === -1) list.push(entry);
   else list[i] = entry;
-  writeStore();
+  writeStore({ servers: list });
 }
 
 function friendlyError(err) {
@@ -170,6 +191,7 @@ class Session {
 
   connect() {
     clearTimeout(this.timer);
+    this.timer = null;
     this.teardown();
     const gen = ++this.gen;
     const c = new Client();
@@ -214,7 +236,12 @@ class Session {
   async onReady(gen) {
     if (gen !== this.gen) return;
     this.hasTmux = this.cfg.useTmux ? await this.checkTmux(this.client) : false;
-    if (gen !== this.gen) return;
+    // Si la conexión se cayó durante la revisión de tmux, onDown ya se encargó (el gen aún no cambia).
+    if (gen !== this.gen || this.downGen === gen) return;
+    if (this.hasTmux === null) {
+      this.hasTmux = false;
+      return this.onDown(gen, new Error('El servidor no respondió a tiempo.'));
+    }
     this.notice = this.cfg.useTmux && !this.hasTmux
       ? 'tmux no está instalado en el servidor: si se corta la conexión se perderá lo que estaba corriendo.'
       : '';
@@ -229,10 +256,12 @@ class Session {
     this.openShell();
   }
 
+  // true/false: hay o no hay tmux. null: el servidor no contestó (mejor reconectar que perder tmux).
   checkTmux(c) {
     return new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve(false), 10000);
-      c.exec('command -v tmux', (err, ch) => {
+      const timeout = setTimeout(() => resolve(null), 10000);
+      const run = (fn) => { try { fn(); } catch { clearTimeout(timeout); resolve(null); } };
+      run(() => c.exec('command -v tmux', (err, ch) => {
         if (err) {
           clearTimeout(timeout);
           return resolve(false);
@@ -245,7 +274,7 @@ class Session {
         });
         ch.resume();
         ch.stderr.resume();
-      });
+      }));
     });
   }
 
@@ -260,7 +289,19 @@ class Session {
       this.opening = false;
       if (err) return this.onDown(gen, err);
       this.stream = stream;
-      if (this.saveOnOpen) saveServer(this.cfg);
+      if (this.saveOnOpen) {
+        try {
+          saveServer(this.cfg);
+        } catch (err) {
+          // En la prueba del formulario, no poder guardar es un fallo. Ya conectado (huella nueva),
+          // se sigue conectado: se reintenta guardar la próxima vez.
+          if (this.test) {
+            this.gen++;
+            this.teardown();
+            return this.fail('test', err.message);
+          }
+        }
+      }
       this.saveOnOpen = false;
       this.test = false;
       let exited = false;
@@ -288,8 +329,14 @@ class Session {
     // en vez de encogerse al más chico.
     const tmuxCmd = `tmux -u new-session -A -s ${TMUX_SESSION}`
       + ' \\; set -gq set-clipboard on \\; set -gq allow-passthrough on \\; set -gq window-size latest';
-    if (this.hasTmux) c.exec(tmuxCmd, { pty }, onOpen);
-    else c.shell(pty, onOpen);
+    // ssh2 lanza "Not connected" al instante si el socket ya no sirve: se trata como una caída.
+    try {
+      if (this.hasTmux) c.exec(tmuxCmd, { pty }, onOpen);
+      else c.shell(pty, onOpen);
+    } catch (err) {
+      this.opening = false;
+      this.onDown(gen, err);
+    }
   }
 
   onDown(gen, err) {
@@ -345,15 +392,21 @@ class Session {
 
   // Al despertar la PC o volver la red: reintenta ya, o comprueba que la conexión siga viva.
   wake() {
+    // Solo se adelanta el intento si está esperando el siguiente (timer); si ya hay uno en curso, se deja.
     if (this.state === 'reconnecting') {
-      this.connect();
+      if (this.timer) this.connect();
     } else if ((this.state === 'connected' || this.state === 'ended') && this.client) {
       const gen = this.gen;
       const timeout = setTimeout(() => this.onDown(gen, new Error('La conexión no respondió.')), 8000);
-      this.client.exec('true', (err, ch) => {
+      try {
+        this.client.exec('true', (err, ch) => {
+          clearTimeout(timeout);
+          if (ch) ch.resume();
+        });
+      } catch (err) {
         clearTimeout(timeout);
-        if (ch) ch.resume();
-      });
+        this.onDown(gen, err);
+      }
     }
   }
 
@@ -398,7 +451,14 @@ function wakeAll() {
 
 // ---------- IPC ----------
 
-ipcMain.handle('servers:list', () => ({ servers: getStore().servers.map(publicServer) }));
+ipcMain.handle('servers:list', () => {
+  try {
+    return { servers: getStore().servers.map(publicServer) };
+  } catch (err) {
+    return { servers: [], error: `No se pudo leer la lista de servidores (${err.code || err.message}). ` +
+      'Puede que otro programa la tenga abierta; cierra SSH Connect y vuelve a abrirlo.' };
+  }
+});
 
 // Prueba los datos del formulario (sin reintentos) y los guarda tras el primer "ready".
 ipcMain.handle('server:save', async (e, form) => {
@@ -412,6 +472,11 @@ ipcMain.handle('server:save', async (e, form) => {
   if (!host) return { ok: false, error: 'Escribe la dirección del servidor.' };
   if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, error: 'El puerto debe ser un número del 1 al 65535.' };
   if (!String(form.username ?? '').trim()) return { ok: false, error: 'Escribe el usuario.' };
+  // Si la guardada no se puede leer, no se prueba con una vacía (diría "contraseña incorrecta").
+  if (!form.password && !saved) return { ok: false, error: 'Escribe la contraseña.' };
+  if (!form.password && saved.password === null) {
+    return { ok: false, kind: 'password', error: 'No se pudo leer la contraseña guardada. Escríbela de nuevo.' };
+  }
   const cfg = {
     id,
     name: String(form.name).trim() || host,
@@ -429,7 +494,7 @@ ipcMain.handle('server:save', async (e, form) => {
   const sameConnection = saved && saved.password !== null && !form.password && !form.acceptNewKey && saved.host === host &&
     saved.port === port && saved.username === cfg.username && saved.useTmux === cfg.useTmux;
   if (sameConnection) {
-    saveServer(cfg);
+    try { saveServer(cfg); } catch (err) { return { ok: false, error: err.message, id }; }
     const s = sessions.get(id);
     if (s && s.cfg) Object.assign(s.cfg, { name: cfg.name, color: cfg.color });
     return { ok: true, id };
@@ -443,9 +508,12 @@ ipcMain.handle('server:save', async (e, form) => {
 
 ipcMain.handle('server:delete', (e, id) => {
   dropSession(id);
-  const st = getStore();
-  st.servers = st.servers.filter((s) => s.id !== id);
-  writeStore();
+  try {
+    writeStore({ servers: getStore().servers.filter((s) => s.id !== id) });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
 
 ipcMain.handle('session:open', (e, id) => {
@@ -489,10 +557,17 @@ ipcMain.on('server:menu', (e, id, live) => {
   ]).popup({ window: win });
 });
 
-ipcMain.on('ssh:write', (e, id, data, binary) => sessions.get(id)?.write(data, binary));
-ipcMain.on('ssh:resize', (e, id, cols, rows) => sessionFor(id).resize(cols, rows));
+// Revisiones baratas de tipo: un dato raro desde la ventana no debe tumbar el proceso principal.
+ipcMain.on('ssh:write', (e, id, data, binary) => {
+  if (typeof data === 'string') sessions.get(id)?.write(data, binary);
+});
+ipcMain.on('ssh:resize', (e, id, cols, rows) => {
+  if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) sessionFor(id).resize(cols, rows);
+});
 ipcMain.on('session:wake', () => wakeAll());
-ipcMain.on('clip:write', (e, text) => clipboard.writeText(text));
+ipcMain.on('clip:write', (e, text) => {
+  if (typeof text === 'string') clipboard.writeText(text);
+});
 ipcMain.handle('clip:read', () => clipboard.readText());
 // Solo enlaces web: nada de file:, javascript: u otros esquemas que mande el servidor.
 // Se interpreta con URL (no con una regex) para que no cuele una dirección malformada.
