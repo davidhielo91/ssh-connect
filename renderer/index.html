@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>SSH Connect</title>
+  <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+  <style>
+    :root {
+      --bg: #151a21;
+      --surface: #1c222b;
+      --raised: #232a34;
+      --line: #2a323d;
+      --text: #cdd3dc;
+      --text-strong: #eef1f5;
+      --text-muted: #8a94a3;
+      --focus: #6f9be8;
+      --ok: #6cc48a;
+      --warn: #e0b35a;
+      --bad: #ef6b6b;
+      --idle: #5c6673;
+      --mono: "Cascadia Mono", Consolas, monospace;
+      --state: var(--idle);
+
+      /* Colores para identificar servidores; distintos de los de estado. */
+      --c-blue: #6f9be8;
+      --c-cyan: #56c2d6;
+      --c-violet: #a98ae8;
+      --c-pink: #e57bb6;
+      --c-orange: #ef8d55;
+      --c-teal: #3fae9c;
+      --c-lime: #b5d65a;
+      --c-gray: #8a94a3;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 13px "Segoe UI Variable Text", "Segoe UI", sans-serif; overflow: hidden; }
+    body { display: grid; grid-template: 1fr 26px / 210px 1fr; }
+    :focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+    [hidden] { display: none !important; }
+    .srv-color { --color: var(--c-blue); }
+    [data-color=blue] { --color: var(--c-blue); }
+    [data-color=cyan] { --color: var(--c-cyan); }
+    [data-color=violet] { --color: var(--c-violet); }
+    [data-color=pink] { --color: var(--c-pink); }
+    [data-color=orange] { --color: var(--c-orange); }
+    [data-color=teal] { --color: var(--c-teal); }
+    [data-color=lime] { --color: var(--c-lime); }
+    [data-color=gray] { --color: var(--c-gray); }
+
+    /* ---------- Barra lateral ---------- */
+    #side { display: flex; flex-direction: column; min-height: 0; background: var(--surface); border-right: 1px solid var(--line); }
+    #side ul { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; }
+    .item { position: relative; display: flex; align-items: center; border-radius: 6px; }
+    .item:hover, .item.current { background: var(--raised); }
+    .item::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 2px; background: var(--color); }
+    .item .pick { flex: 1; min-width: 0; display: grid; grid-template-columns: 1fr auto; column-gap: 8px; align-items: center; padding: 6px 6px 6px 12px; background: none; border: 0; border-radius: 6px; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+    .item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-strong); }
+    .item.current .name { font-weight: 600; }
+    .item .addr { grid-column: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font: 11px var(--mono); }
+    .item .edit { position: absolute; right: 20px; top: 50%; transform: translateY(-50%); background: var(--raised); border: 0; border-radius: 4px; color: var(--text-muted); cursor: pointer; padding: 3px 5px; opacity: 0; }
+    .item:hover .edit, .item .edit:focus-visible { opacity: 1; }
+    .item .edit:hover { color: var(--text-strong); }
+    .state { grid-column: 2; grid-row: 1 / span 2; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--idle); }
+    .state[data-state=connected] { background: var(--ok); border-color: var(--ok); }
+    .state[data-state=connecting], .state[data-state=reconnecting] { background: var(--warn); border-color: var(--warn); }
+    .state[data-state=failed] { background: var(--bad); border-color: var(--bad); }
+    .state[data-state=ended] { background: var(--idle); }
+    #add { margin: 6px; padding: 7px 10px; background: none; border: 1px dashed var(--line); border-radius: 6px; color: var(--text-muted); font: inherit; text-align: left; cursor: pointer; }
+    #add:hover { color: var(--text-strong); border-color: var(--idle); }
+
+    /* ---------- Área principal ---------- */
+    main { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+    #band { height: 3px; flex: none; background: var(--color); }
+    #terms { position: relative; flex: 1; min-height: 0; }
+    .term { position: absolute; inset: 8px 0 0 10px; }
+
+    #home { flex: 1; overflow-y: auto; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 24px 24px; }
+    .home-inner { width: 100%; max-width: 460px; }
+    #home h2 { margin: 0 0 6px; font: 600 17px var(--mono); color: var(--text-strong); }
+    #home p { margin: 0 0 18px; color: var(--text-muted); line-height: 1.5; }
+    #home ul { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+    #home .item { background: var(--surface); border: 1px solid var(--line); }
+    #home .item:hover { border-color: var(--idle); }
+    #home .item .pick { padding: 11px 12px 11px 16px; }
+    #home .item .name { font-size: 14px; }
+    #home .item .addr { font-size: 12px; }
+
+    /* ---------- Barra de estado ---------- */
+    /* El color del estado solo aparece aquí y en el punto de cada servidor. */
+    #bar { grid-column: 1 / -1; position: relative; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 10px; background: var(--surface); border-top: 1px solid var(--line); font: 12px var(--mono); white-space: nowrap; }
+    #bar[data-state=connected] { --state: var(--ok); }
+    #bar[data-state=connecting], #bar[data-state=reconnecting] { --state: var(--warn); }
+    #bar[data-state=failed] { --state: var(--bad); }
+    #line { position: absolute; top: -1px; left: 0; right: 0; height: 2px; background: var(--state); transform-origin: left; }
+    @keyframes countdown { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+    #dot { width: 7px; height: 7px; border-radius: 50%; background: var(--state); flex: none; }
+    #status { overflow: hidden; text-overflow: ellipsis; }
+    #notice { color: var(--warn); overflow: hidden; text-overflow: ellipsis; flex: 1; }
+    #settings { margin-left: auto; background: none; border: 0; border-radius: 4px; color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer; padding: 3px 6px; }
+    #settings:hover, #settings[aria-expanded=true] { color: var(--text-strong); }
+
+    /* ---------- Formulario ---------- */
+    #setup { position: absolute; inset: 0; z-index: 5; background: rgba(10, 13, 17, .6); display: flex; align-items: center; justify-content: center; padding: 16px; overflow-y: auto; }
+    form { width: min(420px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 20px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, .45); animation: rise .14s ease-out; }
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+    h1 { margin: 0 0 4px; font: 600 15px var(--mono); color: var(--text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    label, fieldset { display: flex; flex-direction: column; gap: 5px; color: var(--text-muted); }
+    label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--text); }
+    input[type=checkbox] { accent-color: var(--focus); }
+    input:not([type=checkbox]):not([type=radio]) { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; color: var(--text-strong); padding: 7px 8px; font: 13px var(--mono); }
+    input::placeholder { color: var(--idle); }
+    input:not([type=checkbox]):not([type=radio]):focus-visible { outline-offset: 0; border-color: var(--focus); }
+    .row { display: flex; gap: 10px; }
+    .row label:first-child { flex: 1; }
+    .row label:last-child { width: 80px; }
+    fieldset { margin: 0; padding: 0; border: 0; }
+    legend { padding: 0; margin-bottom: 5px; }
+    .swatches { display: flex; gap: 8px; }
+    .swatches label { position: relative; display: block; cursor: pointer; }
+    .swatches input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+    .swatches span { display: block; width: 22px; height: 22px; border-radius: 50%; background: var(--color); border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--line); }
+    .swatches input:checked + span { box-shadow: 0 0 0 2px var(--text-strong); }
+    .swatches input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 3px; }
+    #error { margin: 0; color: var(--bad); line-height: 1.45; overflow-wrap: anywhere; }
+    #error:empty { display: none; }
+    .buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+    .buttons .spacer { flex: 1; }
+    button.btn { border: 1px solid var(--line); border-radius: 4px; padding: 6px 14px; white-space: nowrap; font: inherit; cursor: pointer; background: none; color: var(--text); }
+    button.btn:hover:not(:disabled) { border-color: var(--idle); }
+    button.btn.primary { background: var(--text); border-color: var(--text); color: var(--bg); font-weight: 600; }
+    button.btn.primary:hover:not(:disabled) { background: var(--text-strong); }
+    button.btn.danger { color: var(--bad); }
+    button.btn.danger.confirm { background: var(--bad); border-color: var(--bad); color: var(--bg); font-weight: 600; }
+    button.btn.quiet { border-color: transparent; padding: 6px 8px; color: var(--text-muted); }
+    button.btn.quiet:hover:not(:disabled) { color: var(--text-strong); border-color: transparent; }
+    button.btn:disabled { opacity: .5; cursor: default; }
+
+    @media (prefers-reduced-motion: reduce) {
+      #line, form { animation: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <nav id="side" aria-label="Servidores">
+    <ul id="list"></ul>
+    <button id="add">+ Agregar servidor</button>
+  </nav>
+
+  <main id="main">
+    <div id="band" class="srv-color" hidden></div>
+    <section id="home" aria-labelledby="home-title">
+      <div class="home-inner">
+        <h2 id="home-title"></h2>
+        <p id="home-hint"></p>
+        <ul id="home-list"></ul>
+        <button class="btn primary" id="home-add">Agregar servidor</button>
+      </div>
+    </section>
+    <div id="terms" hidden></div>
+
+    <div id="setup" role="dialog" aria-modal="true" aria-labelledby="setup-title" hidden>
+      <form id="form" autocomplete="off">
+        <h1 id="setup-title"></h1>
+        <label>Nombre <input name="name" required maxlength="40" placeholder="Mi VPS, Tienda de Juan…"></label>
+        <fieldset>
+          <legend>Color</legend>
+          <div class="swatches" id="swatches"></div>
+        </fieldset>
+        <div class="row">
+          <label>Servidor <input name="host" required placeholder="midominio.com o 192.168.1.10"></label>
+          <label>Puerto <input name="port" type="number" min="1" max="65535" value="22" required></label>
+        </div>
+        <label>Usuario <input name="username" required></label>
+        <label>Contraseña <input name="password" type="password"></label>
+        <label class="check"><input name="useTmux" type="checkbox" checked> Mantener la sesión viva con tmux</label>
+        <p id="error" role="alert"></p>
+        <div class="buttons">
+          <button type="button" class="btn danger" id="remove">Eliminar</button>
+          <button type="button" class="btn quiet" id="disconnect">Desconectar</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn" id="cancel">Cancelar</button>
+          <button type="submit" class="btn primary" id="connect">Conectar</button>
+        </div>
+      </form>
+    </div>
+  </main>
+
+  <div id="bar">
+    <span id="line" aria-hidden="true"></span>
+    <span id="dot" aria-hidden="true"></span>
+    <span id="status" role="status"></span>
+    <span id="notice" aria-live="polite"></span>
+    <button id="settings" title="Editar servidor" aria-label="Editar servidor" aria-expanded="false" aria-controls="setup"><span aria-hidden="true">⚙</span></button>
+  </div>
+
+  <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

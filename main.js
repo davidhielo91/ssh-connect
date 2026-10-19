@@ -1,0 +1,503 @@
+const { app, BrowserWindow, ipcMain, safeStorage, powerMonitor, powerSaveBlocker, clipboard, Menu, shell } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const { Client } = require('ssh2');
+
+// Segundos de espera entre reintentos; el último se repite para siempre.
+const BACKOFF = [1, 2, 5, 10, 30];
+const TMUX_SESSION = 'sshconnect';
+
+let win = null;
+
+function send(channel, ...args) {
+  if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
+}
+
+// ---------- Servidores guardados (contraseñas cifradas con DPAPI vía safeStorage) ----------
+
+const userFile = (name) => path.join(app.getPath('userData'), name);
+let store = null;
+
+function writeStore() {
+  fs.mkdirSync(app.getPath('userData'), { recursive: true });
+  fs.writeFileSync(userFile('servers.json'), JSON.stringify(store, null, 2));
+}
+
+function getStore() {
+  if (store) return store;
+  try {
+    store = JSON.parse(fs.readFileSync(userFile('servers.json'), 'utf8'));
+    return store;
+  } catch {}
+  store = { servers: [], open: [], active: null };
+  // Las versiones anteriores guardaban un único servidor en config.json.
+  try {
+    const old = JSON.parse(fs.readFileSync(userFile('config.json'), 'utf8'));
+    const id = crypto.randomUUID();
+    store.servers.push({
+      id, name: 'Mi servidor', color: 'blue',
+      host: old.host, port: old.port, username: old.username, useTmux: old.useTmux,
+      hostFingerprint: old.hostFingerprint, passwordEnc: old.passwordEnc,
+    });
+    store.open = [id];
+    store.active = id;
+    writeStore();
+    fs.renameSync(userFile('config.json'), userFile('config.json.bak'));
+  } catch {}
+  return store;
+}
+
+const findServer = (id) => getStore().servers.find((s) => s.id === id);
+
+const publicServer = (s) => ({
+  id: s.id, name: s.name, color: s.color, host: s.host, port: s.port, username: s.username, useTmux: s.useTmux,
+});
+
+// Devuelve la configuración con la contraseña descifrada (null si no se pudo leer), o null.
+function getServer(id) {
+  const s = findServer(id);
+  if (!s) return null;
+  let password = null;
+  try {
+    password = safeStorage.decryptString(Buffer.from(s.passwordEnc, 'base64'));
+  } catch {}
+  return { ...s, password };
+}
+
+function saveServer(cfg) {
+  const entry = {
+    id: cfg.id,
+    name: cfg.name,
+    color: cfg.color,
+    host: cfg.host,
+    port: cfg.port,
+    username: cfg.username,
+    useTmux: cfg.useTmux,
+    hostFingerprint: cfg.hostFingerprint,
+    passwordEnc: safeStorage.encryptString(cfg.password).toString('base64'),
+  };
+  const list = getStore().servers;
+  const i = list.findIndex((s) => s.id === cfg.id);
+  if (i === -1) list.push(entry);
+  else list[i] = entry;
+  writeStore();
+}
+
+// Los servidores abiertos se reconectan solos al volver a abrir la app.
+function setOpen(id, open) {
+  const st = getStore();
+  st.open = st.open.filter((x) => x !== id);
+  if (open) st.open.push(id);
+  writeStore();
+}
+
+function friendlyError(err) {
+  if (!err) return 'La conexión se cerró.';
+  const code = err.code || '';
+  if (err.level === 'client-authentication') return 'Usuario o contraseña incorrectos.';
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return 'No se encontró el servidor (revisa la dirección o tu internet).';
+  if (code === 'ECONNREFUSED') return 'El servidor rechazó la conexión (¿el puerto es correcto?).';
+  if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') return 'No hay red hacia el servidor.';
+  if (code === 'ECONNRESET') return 'La conexión se reinició.';
+  if (code === 'ETIMEDOUT' || /timed out/i.test(err.message)) return 'El servidor no respondió a tiempo.';
+  if (/keepalive/i.test(err.message)) return 'El servidor dejó de responder.';
+  return err.message;
+}
+
+// ---------- Sesión SSH con keepalive y reconexión automática (una por servidor) ----------
+
+class Session {
+  constructor(id) {
+    this.id = id;
+    this.cfg = null;
+    this.client = null;
+    this.stream = null;
+    this.gen = 0;          // cada intento de conexión tiene su número; los eventos viejos se ignoran
+    this.downGen = -1;
+    this.attempt = 0;
+    this.timer = null;
+    this.cols = 80;
+    this.rows = 24;
+    this.state = 'idle';
+    this.test = false;     // true mientras probamos datos nuevos del formulario (sin reintentos)
+    this.pending = null;   // resolve() de la promesa que espera el formulario
+    this.hasTmux = false;
+    this.notice = '';
+    this.blocker = null;
+  }
+
+  emit(state, extra = {}) {
+    this.state = state;
+    this.updateBlocker();
+    send('ssh:status', {
+      id: this.id,
+      state,
+      attempt: this.attempt,
+      tmux: this.hasTmux,
+      notice: this.notice,
+      ...extra,
+    });
+  }
+
+  // Evita que Windows suspenda la app mientras hay una sesión activa.
+  updateBlocker() {
+    const active = ['connecting', 'connected', 'reconnecting', 'ended'].includes(this.state);
+    if (active && this.blocker === null) this.blocker = powerSaveBlocker.start('prevent-app-suspension');
+    if (!active && this.blocker !== null) {
+      powerSaveBlocker.stop(this.blocker);
+      this.blocker = null;
+    }
+  }
+
+  start(cfg, test) {
+    this.cfg = cfg;
+    this.test = test;
+    this.attempt = 0;
+    if (this.pending) this.pending({ ok: false, error: 'Cancelado.' });
+    this.pending = null;
+    return new Promise((resolve) => {
+      if (test) this.pending = resolve;
+      else resolve({ ok: true });
+      this.connect();
+    });
+  }
+
+  connect() {
+    clearTimeout(this.timer);
+    this.teardown();
+    const gen = ++this.gen;
+    const c = new Client();
+    this.client = c;
+    this.hostKeyMismatch = null;
+    this.seenFingerprint = null;
+    this.emit(this.attempt ? 'reconnecting' : 'connecting');
+
+    c.on('keyboard-interactive', (name, instr, lang, prompts, finish) => {
+      finish(prompts.map(() => this.cfg.password));
+    });
+    c.on('ready', () => this.onReady(gen));
+    c.on('error', (err) => this.onDown(gen, err));
+    c.on('close', () => this.onDown(gen));
+
+    c.connect({
+      host: this.cfg.host,
+      port: this.cfg.port,
+      username: this.cfg.username,
+      password: this.cfg.password,
+      tryKeyboard: true,
+      readyTimeout: 20000,
+      keepaliveInterval: 15000,
+      keepaliveCountMax: 3,
+      hostVerifier: (key) => this.verifyHost(key),
+    });
+  }
+
+  verifyHost(key) {
+    const fp = 'SHA256:' + crypto.createHash('sha256').update(key).digest('base64').replace(/=+$/, '');
+    this.seenFingerprint = fp;
+    if (!this.cfg.hostFingerprint || this.cfg.acceptNewKey || fp === this.cfg.hostFingerprint) return true;
+    this.hostKeyMismatch = fp;
+    return false;
+  }
+
+  async onReady(gen) {
+    if (gen !== this.gen) return;
+    this.hasTmux = this.cfg.useTmux ? await this.checkTmux(this.client) : false;
+    if (gen !== this.gen) return;
+    this.notice = this.cfg.useTmux && !this.hasTmux
+      ? 'tmux no está instalado en el servidor: si se corta la conexión se perderá lo que estaba corriendo.'
+      : '';
+
+    const fingerprintChanged = this.cfg.hostFingerprint !== this.seenFingerprint;
+    this.cfg.hostFingerprint = this.seenFingerprint;
+    this.cfg.acceptNewKey = false;
+    if (this.test || fingerprintChanged) saveServer(this.cfg);
+    if (this.test) setOpen(this.id, true);
+    this.test = false;
+    this.attempt = 0;
+    this.openShell();
+  }
+
+  checkTmux(c) {
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => resolve(false), 10000);
+      c.exec('command -v tmux', (err, ch) => {
+        if (err) {
+          clearTimeout(timeout);
+          return resolve(false);
+        }
+        let code = null;
+        ch.on('exit', (exitCode) => { code = exitCode; });
+        ch.on('close', () => {
+          clearTimeout(timeout);
+          resolve(code === 0);
+        });
+        ch.resume();
+        ch.stderr.resume();
+      });
+    });
+  }
+
+  openShell() {
+    const c = this.client;
+    const gen = this.gen;
+    const pty = { term: 'xterm-256color', cols: this.cols, rows: this.rows };
+
+    const onOpen = (err, stream) => {
+      if (gen !== this.gen) return;
+      if (err) return this.onDown(gen, err);
+      this.stream = stream;
+      let exited = false;
+      stream.on('data', (d) => send('ssh:data', this.id, d));
+      stream.stderr.on('data', (d) => send('ssh:data', this.id, d));
+      stream.on('exit', () => { exited = true; });
+      stream.on('close', () => {
+        if (gen !== this.gen || this.stream !== stream) return;
+        this.stream = null;
+        // El shell terminó (exit o detach de tmux) pero la conexión sigue viva.
+        if (exited) this.emit('ended');
+      });
+      this.emit('connected');
+      if (this.pending) {
+        this.pending({ ok: true });
+        this.pending = null;
+      }
+    };
+
+    // "-A" se une a la sesión si ya existe: así se recupera todo tras una reconexión.
+    // set-clipboard/allow-passthrough dejan pasar el OSC 52 de los programas (copiar a Windows);
+    // -q calla el error en tmux viejos que no conocen la opción.
+    const tmuxCmd = `tmux new-session -A -s ${TMUX_SESSION}`
+      + ' \\; set -gq set-clipboard on \\; set -gq allow-passthrough on';
+    if (this.hasTmux) c.exec(tmuxCmd, { pty }, onOpen);
+    else c.shell(pty, onOpen);
+  }
+
+  onDown(gen, err) {
+    if (gen !== this.gen || this.downGen === gen) return;
+    this.downGen = gen;
+    this.teardown();
+
+    if (this.hostKeyMismatch) {
+      return this.fail('fingerprint',
+        `¡La huella del servidor cambió! (${this.hostKeyMismatch}). Puede ser un ataque. ` +
+        'Si reinstalaste el servidor y confías en el cambio, presiona Conectar para aceptar la nueva huella.');
+    }
+    if (err && err.level === 'client-authentication') return this.fail('auth', friendlyError(err));
+    if (this.test) return this.fail('test', friendlyError(err));
+
+    const delay = BACKOFF[Math.min(this.attempt, BACKOFF.length - 1)];
+    this.attempt++;
+    this.emit('reconnecting', { delay, message: friendlyError(err) });
+    this.timer = setTimeout(() => this.connect(), delay * 1000);
+  }
+
+  fail(kind, message) {
+    clearTimeout(this.timer);
+    this.test = false;
+    this.emit('failed', { kind, message });
+    if (this.pending) {
+      this.pending({ ok: false, kind, error: message });
+      this.pending = null;
+    }
+  }
+
+  // Desconexión pedida por el usuario: no se reintenta.
+  stop() {
+    clearTimeout(this.timer);
+    this.gen++;
+    this.teardown();
+    this.test = false;
+    if (this.pending) this.pending({ ok: false, error: 'Cancelado.' });
+    this.pending = null;
+    this.emit('idle');
+  }
+
+  teardown() {
+    this.stream = null;
+    if (!this.client) return;
+    const c = this.client;
+    this.client = null;
+    c.removeAllListeners();
+    c.on('error', () => {});
+    try { c.destroy(); } catch {}
+  }
+
+  // Al despertar la PC o volver la red: reintenta ya, o comprueba que la conexión siga viva.
+  wake() {
+    if (this.state === 'reconnecting') {
+      this.connect();
+    } else if ((this.state === 'connected' || this.state === 'ended') && this.client) {
+      const gen = this.gen;
+      const timeout = setTimeout(() => this.onDown(gen, new Error('La conexión no respondió.')), 8000);
+      this.client.exec('true', (err, ch) => {
+        clearTimeout(timeout);
+        if (ch) ch.resume();
+      });
+    }
+  }
+
+  write(data, binary) {
+    if (this.stream) {
+      this.stream.write(binary ? Buffer.from(data, 'latin1') : data);
+    } else if (this.state === 'ended' && data.includes('\r') && this.client) {
+      this.openShell();
+    }
+  }
+
+  resize(cols, rows) {
+    this.cols = cols;
+    this.rows = rows;
+    if (this.stream) this.stream.setWindow(rows, cols, 0, 0);
+  }
+}
+
+const sessions = new Map();
+const LIVE = ['connecting', 'connected', 'reconnecting', 'ended'];
+
+function sessionFor(id) {
+  let s = sessions.get(id);
+  if (!s) {
+    s = new Session(id);
+    sessions.set(id, s);
+  }
+  return s;
+}
+
+function dropSession(id) {
+  const s = sessions.get(id);
+  if (!s) return;
+  s.stop();
+  sessions.delete(id);
+}
+
+function wakeAll() {
+  for (const s of sessions.values()) s.wake();
+}
+
+// ---------- IPC ----------
+
+ipcMain.handle('servers:list', () => {
+  const st = getStore();
+  return { servers: st.servers.map(publicServer), open: st.open, active: st.active };
+});
+
+// Prueba los datos del formulario (sin reintentos) y los guarda tras el primer "ready".
+ipcMain.handle('server:save', async (e, form) => {
+  const saved = form.id ? getServer(form.id) : null;
+  if (form.id && !saved) return { ok: false, error: 'No se encontró el servidor guardado.' };
+  const id = saved ? saved.id : crypto.randomUUID();
+  const host = String(form.host).trim();
+  const port = Number(form.port) || 22;
+  const cfg = {
+    id,
+    name: String(form.name).trim() || host,
+    color: String(form.color || 'blue'),
+    host,
+    port,
+    username: String(form.username).trim(),
+    password: form.password || (saved && saved.password) || '',
+    useTmux: !!form.useTmux,
+    hostFingerprint: saved && saved.host === host && saved.port === port ? saved.hostFingerprint : null,
+    acceptNewKey: !!form.acceptNewKey,
+  };
+
+  // Si solo cambian el nombre o el color, no hace falta reconectar.
+  const sameConnection = saved && saved.password !== null && !form.password && !form.acceptNewKey && saved.host === host &&
+    saved.port === port && saved.username === cfg.username && saved.useTmux === cfg.useTmux;
+  if (sameConnection) {
+    saveServer(cfg);
+    const s = sessions.get(id);
+    if (s && s.cfg) Object.assign(s.cfg, { name: cfg.name, color: cfg.color });
+    return { ok: true, id };
+  }
+
+  const res = await sessionFor(id).start(cfg, true);
+  // Un servidor nuevo que no llegó a conectar no se guarda.
+  if (!res.ok && !saved) dropSession(id);
+  return { ...res, id };
+});
+
+ipcMain.handle('server:delete', (e, id) => {
+  dropSession(id);
+  const st = getStore();
+  st.servers = st.servers.filter((s) => s.id !== id);
+  st.open = st.open.filter((x) => x !== id);
+  if (st.active === id) st.active = null;
+  writeStore();
+});
+
+ipcMain.handle('session:open', (e, id) => {
+  const s = sessionFor(id);
+  if (LIVE.includes(s.state)) return { ok: true };
+  const cfg = getServer(id);
+  if (!cfg) return { ok: false, error: 'No se encontró el servidor guardado.' };
+  if (cfg.password === null) {
+    return { ok: false, kind: 'password', error: 'No se pudo leer la contraseña guardada. Escríbela de nuevo.' };
+  }
+  setOpen(id, true);
+  return s.start(cfg, false);
+});
+
+ipcMain.on('session:close', (e, id) => {
+  dropSession(id);
+  setOpen(id, false);
+});
+
+ipcMain.on('session:active', (e, id) => {
+  getStore().active = id;
+  writeStore();
+});
+
+ipcMain.on('ssh:write', (e, id, data, binary) => sessions.get(id)?.write(data, binary));
+ipcMain.on('ssh:resize', (e, id, cols, rows) => sessionFor(id).resize(cols, rows));
+ipcMain.on('session:wake', () => wakeAll());
+ipcMain.on('clip:write', (e, text) => clipboard.writeText(text));
+ipcMain.handle('clip:read', () => clipboard.readText());
+// Solo enlaces web: nada de file:, javascript: u otros esquemas que mande el servidor.
+ipcMain.on('link:open', (e, url) => {
+  if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+});
+
+// ---------- Ventana ----------
+
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1100,
+    height: 650,
+    minWidth: 600,
+    minHeight: 300,
+    title: 'SSH Connect',
+    backgroundColor: '#151a21',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+}
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  });
+
+  app.whenReady().then(() => {
+    Menu.setApplicationMenu(null);
+    createWindow();
+    // Tras suspender, la red tarda un momento en volver.
+    powerMonitor.on('resume', () => setTimeout(wakeAll, 2000));
+  });
+
+  app.on('window-all-closed', () => {
+    for (const s of sessions.values()) s.teardown();
+    app.quit();
+  });
+}
