@@ -312,6 +312,8 @@ function renderLists() {
     ? 'Necesitas la dirección del servidor, tu usuario y tu contraseña SSH.'
     : 'Para conectar uno, haz clic derecho sobre él y elige Conectar. Los que ya están conectados siguen así en segundo plano.');
   $('home-add').hidden = !empty || !!error;
+  // Sin poder leer la lista, agregar uno nuevo solo daría otro error.
+  $('add').hidden = !!error;
 }
 
 async function refresh() {
@@ -496,7 +498,7 @@ form.addEventListener('submit', async (e) => {
   if (res.ok) {
     if (id && !stayConnected) disconnect(res.id);
     // Una prueba fallida cortó la sesión y luego se guardó sin cambios de conexión: se reconecta.
-    else if (id && stateOf(id) === 'failed') openSession(id);
+    else if (id && tested && stateOf(id) === 'failed') openSession(id);
     await refresh();
     closeForm();
     select(res.id);

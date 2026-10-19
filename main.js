@@ -62,19 +62,21 @@ function getStore() {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     fs.renameSync(userFile('servers.json'), userFile(`servers.json.corrupt-${stamp}`));
   }
-  store = { servers: [] };
   // Las versiones anteriores guardaban un único servidor en config.json.
-  try {
-    const old = JSON.parse(fs.readFileSync(userFile('config.json'), 'utf8'));
-    const id = crypto.randomUUID();
-    // Solo se aparta config.json si la lista nueva se pudo escribir; si no, se reintenta al abrir.
-    writeStore({ servers: [{
-      id, name: 'Mi servidor', color: 'blue',
-      host: old.host, port: old.port, username: old.username, useTmux: old.useTmux,
-      hostFingerprint: old.hostFingerprint, passwordEnc: old.passwordEnc,
-    }] });
-    fs.renameSync(userFile('config.json'), userFile('config.json.bak'));
-  } catch {}
+  let old = null;
+  try { old = JSON.parse(fs.readFileSync(userFile('config.json'), 'utf8')); } catch {}
+  if (!old) {
+    store = { servers: [] };
+    return store;
+  }
+  // Si no se puede escribir la lista migrada, se lanza (store sigue en null): así ningún guardado
+  // posterior crea un servers.json sin "Mi servidor", y la migración se reintenta.
+  writeStore({ servers: [{
+    id: crypto.randomUUID(), name: 'Mi servidor', color: 'blue',
+    host: old.host, port: old.port, username: old.username, useTmux: old.useTmux,
+    hostFingerprint: old.hostFingerprint, passwordEnc: old.passwordEnc,
+  }] });
+  try { fs.renameSync(userFile('config.json'), userFile('config.json.bak')); } catch {}
   return store;
 }
 
@@ -562,7 +564,8 @@ ipcMain.on('ssh:write', (e, id, data, binary) => {
   if (typeof data === 'string') sessions.get(id)?.write(data, binary);
 });
 ipcMain.on('ssh:resize', (e, id, cols, rows) => {
-  if (Number.isInteger(cols) && Number.isInteger(rows) && cols > 0 && rows > 0) sessionFor(id).resize(cols, rows);
+  const ok = (n) => Number.isInteger(n) && n > 0 && n <= 10000;
+  if (typeof id === 'string' && ok(cols) && ok(rows)) sessionFor(id).resize(cols, rows);
 });
 ipcMain.on('session:wake', () => wakeAll());
 ipcMain.on('clip:write', (e, text) => {
