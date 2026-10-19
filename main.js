@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, powerMonitor, powerSaveBlocker, clipboard, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, powerMonitor, powerSaveBlocker, clipboard, Menu, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -443,6 +443,34 @@ ipcMain.handle('session:open', (e, id) => {
 });
 
 ipcMain.on('session:close', (e, id) => dropSession(id));
+
+// Clic derecho sobre un servidor: es la única forma de conectarlo. La acción elegida vuelve al
+// renderer por 'server:action'; si se cierra el menú sin elegir, no pasa nada.
+ipcMain.on('server:menu', (e, id, live) => {
+  const s = findServer(id);
+  if (!s) return;
+  const pick = (action) => () => send('server:action', id, action);
+  Menu.buildFromTemplate([
+    live ? { label: 'Desconectar', click: pick('disconnect') } : { label: 'Conectar', click: pick('connect') },
+    { label: 'Editar…', click: pick('edit') },
+    { type: 'separator' },
+    {
+      label: 'Eliminar…',
+      click: async () => {
+        const { response } = await dialog.showMessageBox(win, {
+          type: 'warning',
+          title: 'Eliminar servidor',
+          message: `¿Eliminar "${s.name}"?`,
+          detail: 'Se borra de la lista junto con su contraseña guardada.',
+          buttons: ['Eliminar', 'Cancelar'],
+          defaultId: 1,
+          cancelId: 1,
+        });
+        if (response === 0) send('server:action', id, 'delete');
+      },
+    },
+  ]).popup({ window: win });
+});
 
 ipcMain.on('ssh:write', (e, id, data, binary) => sessions.get(id)?.write(data, binary));
 ipcMain.on('ssh:resize', (e, id, cols, rows) => sessionFor(id).resize(cols, rows));

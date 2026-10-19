@@ -16,6 +16,8 @@ const views = new Map(); // id → { term, fit, el, status }
 const server = (id) => servers.find((s) => s.id === id);
 const stateOf = (id) => views.get(id)?.status?.state || 'idle';
 const isOpen = (id) => stateOf(id) !== 'idle';
+// Con conexión pedida por el usuario (conectando, conectado, reconectando o shell terminado).
+const isLive = (id) => ['connecting', 'connected', 'reconnecting', 'ended'].includes(stateOf(id));
 
 // ---------- Terminales (una por servidor abierto) ----------
 
@@ -161,6 +163,7 @@ api.onData((id, data) => views.get(id)?.term.write(data));
 
 // ---------- Cambiar de servidor ----------
 
+// Elegir un servidor solo lo muestra: se conecta únicamente con clic derecho → Conectar.
 function select(id) {
   active = id;
   $('home').hidden = !!id;
@@ -170,7 +173,6 @@ function select(id) {
   if (id) {
     $('band').dataset.color = server(id).color;
     const v = view(id);
-    if (['idle', 'failed'].includes(stateOf(id))) openSession(id);
     doFit();
     v.term.focus();
   }
@@ -183,6 +185,32 @@ async function openSession(id) {
   const res = await api.open(id);
   if (!res.ok && id === active && $('setup').hidden) openForm(id, res.error, 'auth');
 }
+
+function connect(id) {
+  select(id);
+  openSession(id);
+}
+
+function disconnect(id) {
+  api.close(id);
+}
+
+async function removeServer(id) {
+  await api.deleteServer(id);
+  dropView(id);
+  if (active === id) active = null;
+  await refresh();
+  select(active);
+}
+
+// Lo que se eligió en el menú del clic derecho (main.js 'server:menu').
+api.onServerAction((id, action) => {
+  if (!server(id)) return;
+  if (action === 'connect') connect(id);
+  else if (action === 'disconnect') disconnect(id);
+  else if (action === 'edit') openForm(id);
+  else if (action === 'delete') removeServer(id);
+});
 
 // Ctrl+1…9 salta al servidor N; Ctrl+Tab / Ctrl+Shift+Tab recorren los abiertos.
 function switchKey(e) {
@@ -238,6 +266,10 @@ function item(s) {
   edit.addEventListener('click', () => openForm(s.id));
 
   li.append(pick, edit);
+  li.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    api.serverMenu(s.id, isLive(s.id));
+  });
   return li;
 }
 
@@ -256,7 +288,7 @@ function renderLists() {
   $('home-title').textContent = empty ? 'Agrega tu primer servidor' : 'Tus servidores';
   $('home-hint').textContent = empty
     ? 'Necesitas la dirección del servidor, tu usuario y tu contraseña SSH.'
-    : 'Elige uno para abrir su terminal. Los que ya están conectados siguen así en segundo plano.';
+    : 'Para conectar uno, haz clic derecho sobre él y elige Conectar. Los que ya están conectados siguen así en segundo plano.';
   $('home-add').hidden = !empty;
 }
 
@@ -292,6 +324,8 @@ function renderBar() {
   }
   const st = views.get(active)?.status;
   $('notice').textContent = st?.notice || '';
+  $('offline').hidden = isLive(active);
+  $('offline-name').textContent = s.name;
   switch (st?.state) {
     case 'connecting':
       return setBar('connecting', `Conectando a ${s.name}…`);
@@ -338,6 +372,9 @@ const field = (name) => form.elements.namedItem(name);
 let editing = null;      // id del servidor que se edita; null = nuevo
 let acceptNewKey = false;
 let tested = false;      // si probamos datos nuevos de un servidor ya guardado
+// Guardar prueba la conexión. Si el servidor estaba desconectado, después de la prueba se
+// vuelve a desconectar: solo se queda conectado si el usuario ya lo había pedido (o es nuevo).
+let stayConnected = false;
 
 $('swatches').append(...COLORS.map(([key, label]) => {
   const l = document.createElement('label');
@@ -361,6 +398,8 @@ function openForm(id = null, error = '', kind = '') {
   const s = id && server(id);
   editing = s ? id : null;
   tested = false;
+  // "failed" solo llega tras un Conectar del usuario (o desde este mismo formulario).
+  stayConnected = !s || isLive(id) || stateOf(id) === 'failed';
   form.reset();
   field('name').value = s ? s.name : '';
   field('color').value = s ? s.color : nextColor();
@@ -415,6 +454,7 @@ form.addEventListener('submit', async (e) => {
   });
   setBusy(false);
   if (res.ok) {
+    if (id && !stayConnected) disconnect(res.id);
     await refresh();
     closeForm();
     select(res.id);
@@ -429,8 +469,12 @@ form.addEventListener('submit', async (e) => {
 function cancelForm() {
   const id = editing;
   closeForm();
-  // Si la prueba de datos nuevos cortó la sesión que había, se vuelve a la guardada.
-  if (id && tested && stateOf(id) === 'failed') openSession(id);
+  // Si la prueba de datos nuevos cortó la sesión que había, se vuelve a la guardada;
+  // si no estaba conectado, queda desconectado.
+  if (id && tested && stateOf(id) === 'failed') {
+    if (stayConnected) openSession(id);
+    else disconnect(id);
+  }
 }
 
 let removeTimer = null;
@@ -452,18 +496,13 @@ $('remove').addEventListener('click', async () => {
   }
   const id = editing;
   closeForm();
-  await api.deleteServer(id);
-  dropView(id);
-  if (active === id) active = null;
-  await refresh();
-  select(active);
+  removeServer(id);
 });
 
 $('disconnect').addEventListener('click', () => {
   const id = editing;
   closeForm();
-  api.close(id);
-  if (active === id) select(null);
+  disconnect(id);
 });
 
 $('cancel').addEventListener('click', cancelForm);

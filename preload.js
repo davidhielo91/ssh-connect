@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('api', {
   deleteServer: (id) => ipcRenderer.invoke('server:delete', id),
   open: (id) => ipcRenderer.invoke('session:open', id),
   close: (id) => ipcRenderer.send('session:close', id),
+  serverMenu: (id, live) => ipcRenderer.send('server:menu', id, live),
+  onServerAction: (cb) => ipcRenderer.on('server:action', (e, id, action) => cb(id, action)),
   write: (id, data, binary) => ipcRenderer.send('ssh:write', id, data, binary),
   resize: (id, cols, rows) => ipcRenderer.send('ssh:resize', id, cols, rows),
   wake: () => ipcRenderer.send('session:wake'),

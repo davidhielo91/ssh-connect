@@ -73,6 +73,10 @@
     #band { height: 3px; flex: none; background: var(--color); }
     #terms { position: relative; flex: 1; min-height: 0; }
     .term { position: absolute; inset: 8px 0 0 10px; }
+    /* Tapa la terminal de un servidor que no está conectado. */
+    #offline { position: absolute; inset: 0; z-index: 1; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 24px; text-align: center; color: var(--text-muted); line-height: 1.5; }
+    #offline p { margin: 0; }
+    #offline b { color: var(--text-strong); font-weight: 600; }
 
     #home { flex: 1; overflow-y: auto; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 24px 24px; }
     .home-inner { width: 100%; max-width: 460px; }
@@ -156,7 +160,12 @@
         <button class="btn primary" id="home-add">Agregar servidor</button>
       </div>
     </section>
-    <div id="terms" hidden></div>
+    <div id="terms" hidden>
+      <div id="offline" hidden>
+        <p><b id="offline-name"></b> no está conectado.</p>
+        <p>Haz clic derecho sobre él en la lista y elige <b>Conectar</b>.</p>
+      </div>
+    </div>
 
     <div id="setup" role="dialog" aria-modal="true" aria-labelledby="setup-title" hidden>
       <form id="form" autocomplete="off">

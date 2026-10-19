@@ -13,16 +13,18 @@ Cliente SSH minimalista para Windows, hecho con Electron. Guarda una lista de se
 - **Contraseñas cifradas** con DPAPI de Windows (`safeStorage` de Electron).
 - **Portapapeles por OSC 52:** los programas del servidor (vim, tmux, OpenCode…) pueden copiar directo a tu portapapeles de Windows. Esto funciona también a través de tmux.
 - **Enlaces:** se abren con **Shift+clic**. Solo se abren direcciones `http://` y `https://`.
-- **Nada se conecta solo al abrir la app:** cada servidor se conecta cuando das clic en él en la lista.
+- **Nada se conecta sin que lo pidas:** ni al abrir la app ni al elegir un servidor. Solo se conecta con **clic derecho → Conectar**.
 
 ## Uso
 
 ### Servidores
 
-- **Agregar:** usa "+ Agregar servidor" y escribe el nombre, el color, la dirección, el puerto, el usuario y la contraseña. La app **prueba la conexión antes de guardar**. Si falla, el servidor nuevo no se guarda y el formulario te muestra el error.
-- **Editar:** usa el lápiz ✎ junto al servidor o el engrane ⚙ de la barra de estado. Si cambias solo el nombre o el color, se guarda sin reconectar. Si cambias datos de conexión, se vuelven a probar. Si dejas la contraseña vacía, se conserva la guardada.
-- **Eliminar:** presiona "Eliminar" y después "Sí, eliminar" (tienes 4 s para confirmar).
-- **Desconectar:** desde el formulario de edición. Ese servidor deja de reintentar hasta que vuelvas a darle clic.
+- **Clic normal en un servidor:** solo lo muestra. Si no está conectado, ves el aviso "no está conectado".
+- **Clic derecho en un servidor:** abre un menú con **Conectar** (o **Desconectar** si ya está conectado), **Editar…** y **Eliminar…**. Es la única forma de conectar un servidor guardado. Una vez conectado, si se cae la red, se reconecta solo hasta que lo desconectes.
+- **Agregar:** usa "+ Agregar servidor" y escribe el nombre, el color, la dirección, el puerto, el usuario y la contraseña. La app **prueba la conexión antes de guardar**. Si funciona, el servidor nuevo queda conectado. Si falla, no se guarda y el formulario te muestra el error.
+- **Editar:** usa el lápiz ✎ junto al servidor o el engrane ⚙ de la barra de estado. Si cambias solo el nombre o el color, se guarda sin reconectar. Si cambias datos de conexión, se vuelven a probar. Si el servidor estaba desconectado, después de la prueba vuelve a quedar desconectado. Si dejas la contraseña vacía, se conserva la guardada.
+- **Eliminar:** con clic derecho → Eliminar… (pide confirmación), o en el formulario con "Eliminar" y después "Sí, eliminar" (tienes 4 s para confirmar).
+- **Desconectar:** con clic derecho → Desconectar, o desde el formulario de edición. Deja de reintentar hasta que lo vuelvas a conectar.
 - Si la contraseña es incorrecta o la huella cambió, la app no reintenta y abre el formulario. En el caso de la huella, presiona **Guardar** para aceptar la nueva, pero hazlo solo si sabes por qué cambió (por ejemplo, porque reinstalaste el servidor).
 - Si la contraseña guardada no se puede leer, por ejemplo después de cambiar de usuario de Windows, la app te la pide de nuevo.
 
@@ -43,7 +45,8 @@ Cliente SSH minimalista para Windows, hecho con Electron. Guarda una lista de se
 | Ctrl+C | Copia si hay texto seleccionado; si no, manda ^C al servidor |
 | Ctrl+Shift+C | Copia la selección (nunca manda ^C) |
 | Ctrl+V / Ctrl+Shift+V | Pega |
-| Clic derecho | Copia la selección; si no hay, pega (como PuTTY) |
+| Clic derecho en la terminal | Copia la selección; si no hay, pega (como PuTTY) |
+| Clic derecho en un servidor de la lista | Menú: Conectar / Desconectar, Editar…, Eliminar… |
 | Shift+arrastrar | Selecciona texto aunque el programa use el mouse |
 | Shift+clic | Abre el enlace |
 | Ctrl+1 … Ctrl+9 | Va al servidor 1…9 de la lista |
@@ -119,6 +122,8 @@ Si la ventana está tapada, el `ResizeObserver` no se dispara y hay que llamar `
 | `server:save` | renderer → main | Prueba y guarda el formulario; responde `{ok, error, kind, id}` |
 | `server:delete` | renderer → main | Elimina un servidor |
 | `session:open` / `session:close` | renderer → main | Abre (con reintentos) o cierra la sesión de un servidor |
+| `server:menu` | renderer → main | Muestra el menú del clic derecho de un servidor |
+| `server:action` | main → renderer | Lo elegido en ese menú: `connect`, `disconnect`, `edit` o `delete` |
 | `session:wake` | renderer → main | La red volvió: reintentar o comprobar sesiones |
 | `ssh:write` / `ssh:resize` | renderer → main | Teclado y tamaño de la terminal |
 | `clip:write` / `clip:read` | renderer → main | Portapapeles |
