@@ -15,6 +15,13 @@ Cliente SSH minimalista para Windows, hecho con Electron. Guarda una lista de se
 - **Enlaces:** se abren con **Shift+clic**. Solo se abren direcciones `http://` y `https://`.
 - **Nada se conecta sin que lo pidas:** ni al abrir la app ni al elegir un servidor. Solo se conecta con **clic derecho → Conectar**.
 
+## Instalación
+
+1. Descarga `SSH Connect Setup <versión>.exe` desde la sección **Releases** del repositorio.
+2. Ejecútalo. Como el instalador no está firmado, Windows SmartScreen avisará la primera vez: "Más información" → "Ejecutar de todas formas".
+
+Tus servidores se guardan aparte del programa, así que actualizar o reinstalar no los borra.
+
 ## Uso
 
 ### Servidores
@@ -154,3 +161,7 @@ Para que la app siga siendo simple:
 - Sin snippets ni comandos guardados.
 - Solo Windows.
 - El instalador **no está firmado**, así que Windows SmartScreen mostrará un aviso la primera vez ("Más información" → "Ejecutar de todas formas").
+
+## Licencia
+
+[MIT](LICENSE) © davidhielo91
