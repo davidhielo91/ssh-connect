@@ -40,7 +40,7 @@ Nada se conecta solo: un servidor se conecta con **clic derecho → Conectar**.
 
 ## Instalación
 
-1. Descarga `SSH Connect Setup <versión>.exe` desde la sección **Releases** del repositorio.
+1. Descarga `SSH-Connect-Setup-<versión>.exe` desde la [última versión](https://github.com/davidhielo91/ssh-connect/releases/latest) (en *Assets*).
 2. Ejecútalo. Como el instalador no está firmado, Windows SmartScreen avisará la primera vez: "Más información" → "Ejecutar de todas formas".
 
 Tus servidores se guardan aparte del programa, así que actualizar o reinstalar no los borra.
