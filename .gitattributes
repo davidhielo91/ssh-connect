@@ -1,0 +1,4 @@
+# Texto con LF en el repositorio; Git lo adapta en cada PC.
+* text=auto
+*.png binary
+*.ico binary
