@@ -19,17 +19,27 @@ function send(channel, ...args) {
 const userFile = (name) => path.join(app.getPath('userData'), name);
 let store = null;
 
+// Se escribe a un temporal y se renombra: si la app se corta a medias, servers.json queda intacto.
 function writeStore() {
   fs.mkdirSync(app.getPath('userData'), { recursive: true });
-  fs.writeFileSync(userFile('servers.json'), JSON.stringify(store, null, 2));
+  const file = userFile('servers.json');
+  fs.writeFileSync(file + '.tmp', JSON.stringify(store, null, 2));
+  fs.renameSync(file + '.tmp', file);
 }
 
 function getStore() {
   if (store) return store;
   try {
-    store = JSON.parse(fs.readFileSync(userFile('servers.json'), 'utf8'));
+    const data = JSON.parse(fs.readFileSync(userFile('servers.json'), 'utf8'));
+    if (!Array.isArray(data?.servers)) throw new Error('servers.json sin lista de servidores');
+    store = data;
     return store;
-  } catch {}
+  } catch (err) {
+    // Un archivo ilegible se aparta en vez de pisarlo con una lista vacía.
+    if (err.code !== 'ENOENT') {
+      try { fs.renameSync(userFile('servers.json'), userFile('servers.json.corrupt')); } catch {}
+    }
+  }
   store = { servers: [], open: [], active: null };
   // Las versiones anteriores guardaban un único servidor en config.json.
   try {
@@ -113,7 +123,8 @@ class Session {
     this.cfg = null;
     this.client = null;
     this.stream = null;
-    this.gen = 0;          // cada intento de conexión tiene su número; los eventos viejos se ignoran
+    this.opening = false;  // openShell() pidió un canal que aún no llega
+    this.gen = 0;         // cada intento de conexión tiene su número; los eventos viejos se ignoran
     this.downGen = -1;
     this.attempt = 0;
     this.timer = null;
@@ -244,8 +255,10 @@ class Session {
     const gen = this.gen;
     const pty = { term: 'xterm-256color', cols: this.cols, rows: this.rows };
 
+    this.opening = true;
     const onOpen = (err, stream) => {
       if (gen !== this.gen) return;
+      this.opening = false;
       if (err) return this.onDown(gen, err);
       this.stream = stream;
       let exited = false;
@@ -316,6 +329,7 @@ class Session {
 
   teardown() {
     this.stream = null;
+    this.opening = false;
     if (!this.client) return;
     const c = this.client;
     this.client = null;
@@ -341,7 +355,8 @@ class Session {
   write(data, binary) {
     if (this.stream) {
       this.stream.write(binary ? Buffer.from(data, 'latin1') : data);
-    } else if (this.state === 'ended' && data.includes('\r') && this.client) {
+    } else if (this.state === 'ended' && !this.opening && data.includes('\r') && this.client) {
+      // Varios Enter seguidos abrirían varios shells mientras el primero aún no llega.
       this.openShell();
     }
   }
@@ -477,6 +492,9 @@ function createWindow() {
       sandbox: true,
     },
   });
+  // Soltar un archivo o enlace en la ventana no debe sacarla de la app (el preload seguiría expuesto).
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
