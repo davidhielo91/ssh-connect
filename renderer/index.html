@@ -65,6 +65,7 @@
     .state[data-state=connecting], .state[data-state=reconnecting] { background: var(--warn); border-color: var(--warn); }
     .state[data-state=failed] { background: var(--bad); border-color: var(--bad); }
     .state[data-state=ended] { background: var(--idle); }
+    .item.alert .name::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 7px; border-radius: 50%; background: var(--warn); vertical-align: 1px; }
     #add { margin: 6px; padding: 7px 10px; background: none; border: 1px dashed var(--line); border-radius: 6px; color: var(--text-muted); font: inherit; text-align: left; cursor: pointer; }
     #add:hover { color: var(--text-strong); border-color: var(--idle); }
 
@@ -76,6 +77,12 @@
     /* Tapa la terminal de un servidor que no está conectado. */
     #offline { position: absolute; inset: 0; z-index: 1; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 24px; text-align: center; color: var(--text-muted); line-height: 1.5; }
     #offline p { margin: 0; }
+    /* Buscador de la terminal (Ctrl+F). */
+    #find { position: absolute; top: 8px; right: 18px; z-index: 2; display: flex; align-items: center; gap: 4px; padding: 5px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 18px rgba(0, 0, 0, .4); }
+    #find input { width: 190px; padding: 4px 7px; }
+    #find-count { min-width: 52px; text-align: center; color: var(--text-muted); font: 11px var(--mono); }
+    #find button { background: none; border: 0; border-radius: 4px; color: var(--text-muted); font-size: 14px; line-height: 1; padding: 4px 7px; cursor: pointer; }
+    #find button:hover { color: var(--text-strong); background: var(--raised); }
     #offline b { color: var(--text-strong); font-weight: 600; }
 
     #home { flex: 1; overflow-y: auto; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 24px 24px; }
@@ -100,6 +107,10 @@
     #dot { width: 7px; height: 7px; border-radius: 50%; background: var(--state); flex: none; }
     #status { overflow: hidden; text-overflow: ellipsis; }
     #notice { color: var(--warn); overflow: hidden; text-overflow: ellipsis; flex: 1; }
+    #zoom { background: none; border: 0; border-radius: 4px; color: var(--text-muted); font: inherit; padding: 2px 6px; cursor: pointer; flex: none; }
+    #zoom:hover { color: var(--text-strong); background: var(--raised); }
+    #latency { color: var(--text-muted); flex: none; }
+    #latency[data-slow] { color: var(--warn); }
     #flash { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 50%; }
     #flash[data-kind=warn] { color: var(--warn); }
     #settings { margin-left: auto; background: none; border: 0; border-radius: 4px; color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer; padding: 3px 6px; }
@@ -167,6 +178,13 @@
         <p><b id="offline-name"></b> no está conectado.</p>
         <p>Haz clic derecho sobre él en la lista y elige <b>Conectar</b>.</p>
       </div>
+      <div id="find" role="search" hidden>
+        <input id="find-input" type="text" placeholder="Buscar…" aria-label="Buscar en la terminal" autocomplete="off" spellcheck="false">
+        <span id="find-count" aria-live="polite"></span>
+        <button id="find-prev" title="Anterior (Shift+Enter)" aria-label="Coincidencia anterior">↑</button>
+        <button id="find-next" title="Siguiente (Enter)" aria-label="Coincidencia siguiente">↓</button>
+        <button id="find-close" title="Cerrar (Esc)" aria-label="Cerrar búsqueda">✕</button>
+      </div>
     </div>
 
     <div id="setup" role="dialog" aria-modal="true" aria-labelledby="setup-title" hidden>
@@ -201,6 +219,8 @@
     <span id="dot" aria-hidden="true"></span>
     <span id="status" role="status"></span>
     <span id="notice" aria-live="polite"></span>
+    <button id="zoom" title="Zoom de la terminal (clic para restablecer al 100%)" aria-label="Zoom de la terminal, clic para restablecer" hidden></button>
+    <span id="latency" title="Latencia hasta el servidor"></span>
     <span id="flash" aria-live="polite"></span>
     <button id="settings" title="Editar servidor" aria-label="Editar servidor" aria-expanded="false" aria-controls="setup"><span aria-hidden="true">⚙</span></button>
   </div>
@@ -208,6 +228,7 @@
   <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="../node_modules/@xterm/addon-search/lib/addon-search.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

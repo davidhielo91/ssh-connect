@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, powerMonitor, powerSaveBlocker, clipboard, Menu, shell, dialog, session } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, powerMonitor, powerSaveBlocker, clipboard, Menu, shell, dialog, session, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -13,6 +13,9 @@ if (app.isPackaged && ['remote-debugging-port', 'remote-debugging-pipe'].some((s
 // Segundos de espera entre reintentos; el último se repite para siempre.
 const BACKOFF = [1, 2, 5, 10, 30];
 const TMUX_SESSION = 'sshconnect';
+// Cada cuánto se mide la latencia (ms) y cuánto se espera la respuesta antes de dejarla sin medir.
+const PING_EVERY = 15000;
+const PING_TIMEOUT = 10000;
 
 let win = null;
 
@@ -153,6 +156,35 @@ class Session {
     this.hasTmux = false;
     this.notice = '';
     this.blocker = null;
+    this.pingTimer = null;
+  }
+
+  // Mide el viaje de ida y vuelta con un exec corto (ssh2 no expone el del keepalive).
+  // Una medición lenta no cuenta como caída: de eso se encarga el keepalive.
+  startPing() {
+    clearInterval(this.pingTimer);
+    let busy = false;
+    const gen = this.gen;
+    const ping = () => {
+      const c = this.client;
+      if (busy || gen !== this.gen || !c || this.state !== 'connected') return;
+      busy = true;
+      const t0 = Date.now();
+      const done = () => { busy = false; clearTimeout(timeout); };
+      const timeout = setTimeout(() => { busy = false; }, PING_TIMEOUT);
+      try {
+        c.exec('true', (err, ch) => {
+          done();
+          if (ch) ch.resume();
+          if (!err && gen === this.gen) send('ssh:latency', this.id, Date.now() - t0);
+        });
+      } catch {
+        done();
+      }
+    };
+    this.pingTimer = setInterval(ping, PING_EVERY);
+    // Una primera medición enseguida; si la sesión cambió mientras tanto, el gen la descarta.
+    setTimeout(ping, 2000);
   }
 
   emit(state, extra = {}) {
@@ -317,6 +349,7 @@ class Session {
         if (exited) this.emit('ended');
       });
       this.emit('connected');
+      this.startPing();
       if (this.pending) {
         this.pending({ ok: true });
         this.pending = null;
@@ -382,6 +415,8 @@ class Session {
   }
 
   teardown() {
+    clearInterval(this.pingTimer);
+    this.pingTimer = null;
     this.stream = null;
     this.opening = false;
     if (!this.client) return;
@@ -572,6 +607,23 @@ ipcMain.on('clip:write', (e, text) => {
   if (typeof text === 'string') clipboard.writeText(text);
 });
 ipcMain.handle('clip:read', () => clipboard.readText());
+// Campana en un servidor: aviso nativo solo si la ventana no está a la vista. Al hacer clic se
+// trae la ventana y se selecciona ese servidor.
+ipcMain.on('notify:bell', (e, id) => {
+  if (typeof id !== 'string' || !sessions.has(id) || !Notification.isSupported()) return;
+  if (win && !win.isDestroyed() && win.isFocused()) return;
+  const name = findServer(id)?.name;
+  if (!name) return;
+  const n = new Notification({ title: 'SSH Connect', body: `${name} necesita tu atención`, silent: false });
+  n.on('click', () => {
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    send('server:focus', id);
+  });
+  n.show();
+});
 // Solo enlaces web: nada de file:, javascript: u otros esquemas que mande el servidor.
 // Se interpreta con URL (no con una regex) para que no cuele una dirección malformada.
 ipcMain.on('link:open', (e, url) => {

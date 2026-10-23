@@ -21,11 +21,20 @@ const isLive = (id) => ['connecting', 'connected', 'reconnecting', 'ended'].incl
 
 // ---------- Terminales (una por servidor abierto) ----------
 
+// Tamaño de fuente (Ctrl+rueda, Ctrl+ +/-/0); se recuerda entre sesiones.
+const FONT_MIN = 9, FONT_MAX = 28, FONT_DEFAULT = 14;
+let fontSize = (() => {
+  const n = Number(localStorage.getItem('fontSize'));
+  return n >= FONT_MIN && n <= FONT_MAX ? n : FONT_DEFAULT;
+})();
+
 const TERM_OPTIONS = {
   cursorBlink: !matchMedia('(prefers-reduced-motion: reduce)').matches,
   fontFamily: '"Cascadia Mono", Consolas, monospace',
-  fontSize: 14,
+  fontSize: FONT_DEFAULT,
   scrollback: 10000,
+  // El buscador resalta las coincidencias con decoraciones (API propuesta de xterm).
+  allowProposedApi: true,
   // Hipervínculos OSC 8 (los que emiten algunas apps): igual que los enlaces de texto.
   linkHandler: { activate: (e, uri) => openLink(e, uri), allowNonHttpProtocols: false },
   // Paleta ANSI a juego con la interfaz (index.html :root).
@@ -79,13 +88,15 @@ function view(id) {
   el.className = 'term';
   el.hidden = id !== active;
   $('terms').append(el);
-  const term = new Terminal(TERM_OPTIONS);
+  const term = new Terminal({ ...TERM_OPTIONS, fontSize });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
+  const search = new SearchAddon.SearchAddon();
+  term.loadAddon(search);
   term.loadAddon(new WebLinksAddon.WebLinksAddon(openLink));
   term.open(el);
   // appCopied: el programa acaba de copiar por OSC 52 (ver clic derecho). copies cuenta esas copias.
-  v = { term, fit, el, status: null, appCopied: false, copies: 0, pasteTimer: null };
+  v = { term, fit, search, el, status: null, appCopied: false, copies: 0, pasteTimer: null, alert: false, latency: null };
   views.set(id, v);
 
   term.onResize(({ cols, rows }) => api.resize(id, cols, rows));
@@ -111,12 +122,38 @@ function view(id) {
   });
   term.onBinary((data) => api.write(id, data, true));
 
+  // Campana (BEL): si no estás mirando este servidor, se marca en la lista y avisa Windows.
+  term.onBell(() => {
+    if (id === active && document.hasFocus()) return;
+    if (!v.alert) {
+      v.alert = true;
+      renderLists();
+    }
+    api.bell(id);
+  });
+  search.onDidChangeResults(({ resultIndex, resultCount }) => {
+    if (id !== active) return;
+    $('find-count').textContent = !$('find-input').value ? ''
+      : !resultCount ? 'Sin resultados'
+      : resultIndex < 0 ? `${resultCount}+` : `${resultIndex + 1}/${resultCount}`;
+  });
+
   // Ctrl+C copia si hay texto seleccionado (si no, manda ^C). Ctrl+V y Ctrl+Shift+V pegan.
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
     if (switchKey(e)) return false;
     if (!e.ctrlKey || e.altKey) return true;
     const key = e.key.toLowerCase();
+    if (key === 'f' && !e.shiftKey) {
+      e.preventDefault();
+      openFind();
+      return false;
+    }
+    if (key === '+' || key === '=' || key === '-' || key === '0') {
+      e.preventDefault();
+      setFont(key === '0' ? FONT_DEFAULT : fontSize + (key === '-' ? -1 : 1));
+      return false;
+    }
     if (key === 'c' && (e.shiftKey || term.hasSelection())) {
       e.preventDefault();
       if (term.hasSelection()) api.copy(term.getSelection());
@@ -130,6 +167,14 @@ function view(id) {
     }
     return true;
   });
+
+  // Ctrl+rueda cambia el tamaño de la fuente (en vez de desplazar el historial).
+  el.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setFont(fontSize + (e.deltaY < 0 ? 1 : -1));
+  }, { passive: false, capture: true });
 
   // Clic derecho: copia la selección o, si no hay, pega (como PuTTY). Si el programa del
   // servidor seleccionó y ya copió por OSC 52, no pega: "seleccionar → clic derecho" es copiar.
@@ -158,6 +203,90 @@ function view(id) {
   return v;
 }
 
+function setFont(n) {
+  n = Math.min(FONT_MAX, Math.max(FONT_MIN, n));
+  if (n !== fontSize) {
+    fontSize = n;
+    try { localStorage.setItem('fontSize', String(n)); } catch {}
+    for (const v of views.values()) v.term.options.fontSize = n;
+    doFit();
+  }
+  renderZoom();
+  flash(`Zoom: ${zoomPct()}%`);
+}
+
+const zoomPct = () => Math.round(fontSize / FONT_DEFAULT * 100);
+
+// Indicador fijo en la barra mientras el zoom no sea 100%; un clic lo restablece.
+function renderZoom() {
+  $('zoom').hidden = fontSize === FONT_DEFAULT;
+  $('zoom').textContent = `${zoomPct()}%`;
+}
+$('zoom').addEventListener('click', () => {
+  setFont(FONT_DEFAULT);
+  if (active) views.get(active)?.term.focus();
+});
+
+renderZoom();
+
+// ---------- Buscador (Ctrl+F) ----------
+
+// Colores de resaltado a juego con el tema (xterm exige #RRGGBB).
+const FIND_DECO = {
+  matchBackground: '#4a5a3a', matchBorder: '#6a8a4a', matchOverviewRuler: '#6a8a4a',
+  activeMatchBackground: '#a0762a', activeMatchBorder: '#e0b35a', activeMatchColorOverviewRuler: '#e0b35a',
+};
+
+function runFind(dir, incremental = false) {
+  const v = active && views.get(active);
+  if (!v) return;
+  const q = $('find-input').value;
+  if (!q) {
+    v.search.clearDecorations();
+    $('find-count').textContent = '';
+    return;
+  }
+  const opts = { decorations: FIND_DECO, incremental };
+  if (dir > 0) v.search.findNext(q, opts);
+  else v.search.findPrevious(q, opts);
+}
+
+function openFind() {
+  const v = active && views.get(active);
+  if (!v) return;
+  const input = $('find-input');
+  const sel = v.term.getSelection();
+  if (sel && !sel.includes('\n')) input.value = sel;
+  $('find').hidden = false;
+  input.focus();
+  input.select();
+  runFind(1, true);
+}
+
+function closeFind(refocus = true) {
+  if ($('find').hidden) return;
+  $('find').hidden = true;
+  $('find-count').textContent = '';
+  const v = active && views.get(active);
+  if (!v) return;
+  v.search.clearDecorations();
+  if (refocus) v.term.focus();
+}
+
+$('find-input').addEventListener('input', () => runFind(1, true));
+$('find-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    runFind(e.shiftKey ? -1 : 1);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeFind();
+  }
+});
+$('find-next').addEventListener('click', () => runFind(1));
+$('find-prev').addEventListener('click', () => runFind(-1));
+$('find-close').addEventListener('click', () => closeFind());
+
 function dropView(id) {
   const v = views.get(id);
   if (!v) return;
@@ -178,6 +307,7 @@ api.onData((id, data) => views.get(id)?.term.write(data));
 
 // Elegir un servidor solo lo muestra: se conecta únicamente con clic derecho → Conectar.
 function select(id) {
+  if (id !== active) closeFind(false);
   active = id;
   $('home').hidden = !!id;
   $('terms').hidden = !id;
@@ -186,6 +316,7 @@ function select(id) {
   if (id) {
     $('band').dataset.color = server(id).color;
     const v = view(id);
+    v.alert = false;
     doFit();
     v.term.focus();
   }
@@ -267,7 +398,9 @@ function item(s) {
 
   const pick = document.createElement('button');
   pick.className = 'pick';
-  pick.setAttribute('aria-label', `${s.name}, ${STATE_WORDS[state] || 'desconectado'}`);
+  const alert = !!views.get(s.id)?.alert;
+  if (alert) li.classList.add('alert');
+  pick.setAttribute('aria-label', `${s.name}, ${STATE_WORDS[state] || 'desconectado'}${alert ? ', requiere atención' : ''}`);
   const name = document.createElement('span');
   name.className = 'name';
   name.textContent = s.name;
@@ -352,6 +485,8 @@ function setBar(state, text, countdown = 0, elapsed = 0) {
 function renderBar() {
   const s = active && server(active);
   $('settings').hidden = !s;
+  $('latency').textContent = '';
+  delete $('latency').dataset.slow;
   if (!s) {
     $('notice').textContent = '';
     const n = servers.filter((x) => ['connected', 'ended'].includes(stateOf(x.id))).length;
@@ -359,6 +494,11 @@ function renderBar() {
     return setBar('idle', n ? `${n} de ${servers.length} conectados` : 'Ningún servidor conectado');
   }
   const st = views.get(active)?.status;
+  const ms = views.get(active)?.latency;
+  if (st?.state === 'connected' && ms != null) {
+    $('latency').textContent = `${ms} ms`;
+    if (ms > 400) $('latency').dataset.slow = '';
+  }
   $('notice').textContent = st?.notice || '';
   $('offline').hidden = isLive(active);
   $('offline-name').textContent = s.name;
@@ -386,6 +526,7 @@ api.onStatus((s) => {
   const v = view(s.id);
   const prev = v.status?.state;
   v.status = { ...s, at: Date.now() };
+  if (s.state !== 'connected') v.latency = null;
 
   if (s.state === 'connected' && prev === 'reconnecting') v.term.write('\x1b[32m[Reconectado]\x1b[0m\r\n');
   if (s.state === 'reconnecting' && (prev === 'connected' || prev === 'ended')) {
@@ -398,6 +539,25 @@ api.onStatus((s) => {
   // Un fallo sin reintento (contraseña, huella) en el servidor a la vista abre su formulario.
   if (s.state === 'failed' && s.kind !== 'test' && s.id === active && $('setup').hidden) {
     openForm(s.id, s.message, s.kind);
+  }
+});
+
+api.onLatency((id, ms) => {
+  const v = views.get(id);
+  if (!v || v.status?.state !== 'connected') return;
+  v.latency = ms;
+  if (id === active) renderBar();
+});
+
+// Clic en la notificación de Windows: se muestra ese servidor.
+api.onFocusServer((id) => { if (server(id)) select(id); });
+
+// Al volver a la ventana se da por vista la campana del servidor a la vista.
+window.addEventListener('focus', () => {
+  const v = active && views.get(active);
+  if (v?.alert) {
+    v.alert = false;
+    renderLists();
   }
 });
 

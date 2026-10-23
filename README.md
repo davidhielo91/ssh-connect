@@ -81,6 +81,8 @@ Tus servidores se guardan aparte del programa, así que actualizar o reinstalar 
 | Shift+clic | Abre el enlace |
 | Ctrl+1 … Ctrl+9 | Va al servidor 1…9 de la lista |
 | Ctrl+Tab / Ctrl+Shift+Tab | Siguiente / anterior servidor abierto |
+| Ctrl+F | Busca en la terminal (Enter siguiente, Shift+Enter anterior, Esc cierra) |
+| Ctrl+rueda, Ctrl++ / Ctrl+- / Ctrl+0 | Tamaño de la fuente (se recuerda); Ctrl+0 lo restablece |
 | Enter | Tras "sesión terminada", abre un shell nuevo |
 | Esc | Cierra el formulario |
 
@@ -89,6 +91,8 @@ Sobre el clic derecho, hay dos casos especiales:
 - Si el programa usa el mouse (por ejemplo OpenCode, que copia con clic derecho), la app espera 600 ms antes de pegar. Si en ese tiempo el programa copió algo, no pega.
 
 **Historial dentro de tmux:** tmux usa su propia pantalla, así que la rueda del mouse no recorre el historial de la terminal. Para ver lo anterior usa `Ctrl+B` y luego `[`, muévete con las flechas o RePág/AvPág, y sal con `q`.
+
+**Avisos:** si un programa del servidor manda la campana (`\a`) y no estás mirando ese servidor, aparece un punto ámbar junto a él y, si la ventana no está en primer plano, una notificación de Windows (al hacer clic se abre ese servidor). Para que te avise al terminar un comando largo: `comando; printf '\a'`. La barra de estado muestra la latencia al servidor (en ámbar si pasa de 400 ms); se mide cada 15 s con un canal corto.
 
 ## Dónde se guardan los datos
 
