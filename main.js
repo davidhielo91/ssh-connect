@@ -632,6 +632,48 @@ ipcMain.on('link:open', (e, url) => {
   if (u.protocol === 'http:' || u.protocol === 'https:') shell.openExternal(u.href);
 });
 
+// ---------- Actualizaciones (solo con la app instalada) ----------
+
+// Se descargan en segundo plano y no se instalan solas: la barra avisa y el usuario decide cuándo
+// reiniciar (reiniciar corta las sesiones abiertas). Si no, se instalan al cerrar la app.
+const UPDATE_EVERY = 6 * 60 * 60 * 1000;
+let updater = null;
+let updateVersion = null;
+
+function setupUpdates() {
+  if (!app.isPackaged) return;
+  updater = require('electron-updater').autoUpdater;
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;
+  updater.on('update-downloaded', (info) => {
+    updateVersion = info.version;
+    send('update:ready', info.version);
+  });
+  // Sin red o sin versión nueva no hay nada que avisar: se vuelve a intentar más tarde.
+  updater.on('error', (err) => console.error('Actualización:', err.message));
+  const check = () => updater.checkForUpdates().catch(() => {});
+  setTimeout(check, 10000);
+  setInterval(check, UPDATE_EVERY);
+}
+
+ipcMain.on('update:install', async () => {
+  if (!updater || !updateVersion) return;
+  const live = [...sessions.values()].filter((s) => LIVE.includes(s.state)).length;
+  if (live) {
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'question',
+      title: 'Actualizar SSH Connect',
+      message: `Se reiniciará SSH Connect para instalar la versión ${updateVersion}.`,
+      detail: `Tienes ${live} ${live === 1 ? 'sesión abierta' : 'sesiones abiertas'}: se cortarán y habrá que conectarlas de nuevo. Con tmux retomas lo que estaba corriendo.`,
+      buttons: ['Reiniciar y actualizar', 'Más tarde'],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (response !== 0) return;
+  }
+  updater.quitAndInstall(true, true);
+});
+
 // ---------- Ventana ----------
 
 function createWindow() {
@@ -669,6 +711,7 @@ if (!app.requestSingleInstanceLock()) {
     // La app no necesita cámara, micrófono, notificaciones ni ningún otro permiso del navegador.
     session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => callback(false));
     createWindow();
+    setupUpdates();
     // Tras suspender, la red tarda un momento en volver.
     powerMonitor.on('resume', () => setTimeout(wakeAll, 2000));
   });

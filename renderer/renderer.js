@@ -549,6 +549,14 @@ api.onLatency((id, ms) => {
   if (id === active) renderBar();
 });
 
+// Una versión nueva ya descargada: botón fijo en la barra; el clic pide reiniciar para instalarla.
+api.onUpdate((version) => {
+  $('update').textContent = `Actualizar a v${version}`;
+  $('update').title = 'Reiniciar SSH Connect para instalar la actualización';
+  $('update').hidden = false;
+});
+$('update').addEventListener('click', () => api.installUpdate());
+
 // Clic en la notificación de Windows: se muestra ese servidor.
 api.onFocusServer((id) => { if (server(id)) select(id); });
 

@@ -1,7 +1,7 @@
 {
   "name": "ssh-connect",
   "productName": "SSH Connect",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Cliente SSH sencillo para Windows con conexión que nunca se cae",
   "main": "main.js",
   "scripts": {
@@ -16,6 +16,7 @@
     "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
+    "electron-updater": "^6.8.9",
     "ssh2": "^1.17.0"
   },
   "devDependencies": {
@@ -28,12 +29,18 @@
   "build": {
     "appId": "com.sshconnect.app",
     "productName": "SSH Connect",
+    "artifactName": "SSH-Connect-Setup-${version}.${ext}",
     "files": [
       "main.js",
       "preload.js",
       "renderer/**/*"
     ],
     "npmRebuild": false,
+    "publish": {
+      "provider": "github",
+      "owner": "davidhielo91",
+      "repo": "ssh-connect"
+    },
     "electronFuses": {
       "runAsNode": false,
       "enableNodeOptionsEnvironmentVariable": false,

@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('api', {
   copy: (text) => ipcRenderer.send('clip:write', text),
   paste: () => ipcRenderer.invoke('clip:read'),
   openLink: (url) => ipcRenderer.send('link:open', url),
+  onUpdate: (cb) => ipcRenderer.on('update:ready', (e, version) => cb(version)),
+  installUpdate: () => ipcRenderer.send('update:install'),
   bell: (id) => ipcRenderer.send('notify:bell', id),
   onFocusServer: (cb) => ipcRenderer.on('server:focus', (e, id) => cb(id)),
   onLatency: (cb) => ipcRenderer.on('ssh:latency', (e, id, ms) => cb(id, ms)),

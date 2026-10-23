@@ -116,12 +116,14 @@ Requisitos: Node.js y npm 11.
 ```sh
 npm install      # instala dependencias (solo electron ejecuta su script de instalación)
 npm start        # abre la app en modo desarrollo
-npm run dist     # genera dist/SSH Connect Setup <versión>.exe (instalador NSIS, con el ícono de build/icon.png)
+npm run dist     # genera dist/SSH-Connect-Setup-<versión>.exe (instalador NSIS, con el ícono de build/icon.png)
 node --check main.js   # revisión rápida de sintaxis
 ```
 
 - npm 11 bloquea los scripts de instalación por defecto. Solo `electron` está permitido (`allowScripts` en `package.json`), porque necesita descargar su binario. La criptografía nativa opcional de `ssh2` no se compila a propósito, así que usa la versión en JavaScript. Por eso también `npmRebuild: false` en la configuración de electron-builder.
 - No hay pruebas automáticas, linter ni bundler.
+
+**Publicar una versión:** sube `version` en `package.json`, ejecuta `npm run dist` y crea un Release en GitHub (tag `v<versión>`) con tres archivos de `dist/`: `SSH-Connect-Setup-<versión>.exe`, su `.blockmap` y `latest.yml`. La app instalada revisa los Releases al abrir y cada 6 horas, descarga la versión nueva en segundo plano y muestra un botón **Actualizar a vX.Y.Z** en la barra de abajo; si no lo usas, se instala al cerrar la app. Reiniciar corta las sesiones abiertas (con tmux retomas lo que corría), y por eso pregunta antes. La actualización solo funciona desde la versión 1.1.0 en adelante.
 
 ### Pruebas manuales
 
